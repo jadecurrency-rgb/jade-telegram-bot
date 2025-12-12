@@ -54,7 +54,7 @@ async function broadcastVote(message) {
   for (const chatId of CHAT_IDS) await sendToTelegram(chatId, message);
 }
 
-// Vote webhook — notifications (working!)
+// Vote webhook — instant notifications (already working!)
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol, round } = req.body;
@@ -80,7 +80,7 @@ https://jade1.io
   }
 });
 
-// Safe leaderboard
+// Safe leaderboard update with CORRECT ranking
 async function updateLeaderboard() {
   if (!votingContract) return;
 
@@ -93,23 +93,31 @@ async function updateLeaderboard() {
     const round = roundBig.toString();
     const [names, symbols, _, votesRaw] = projects;
 
-    const ranked = [];
+    // Collect all valid projects
+    const entries = [];
     let totalVotes = 0;
     for (let i = 0; i < 20; i++) {
       if (names[i]?.trim()) {
         const votes = Number(ethers.formatUnits(votesRaw[i] || 0n, 18));
         totalVotes += votes;
-        ranked.push({ rank: ranked.length + 1, name: names[i], symbol: symbols[i], votes: votes.toFixed(4) });
+        entries.push({
+          name: names[i],
+          symbol: symbols[i],
+          votes: votes
+        });
       }
     }
 
-    ranked.sort((a, b) => b.votes - a.votes);
+    // Sort by votes descending
+    entries.sort((a, b) => b.votes - a.votes);
 
+    // Build formatted leaderboard with correct ranks
     let text = `*Jade1 Live Leaderboard* — Round #${round}\n`;
     text += `Total Votes: *${totalVotes.toFixed(0)} JADE*\n\n`;
 
-    for (const p of ranked.slice(0, 15)) {
-      text += `${p.rank}. *${p.name} (${p.symbol})* — ${p.votes} JADE\n`;
+    for (let i = 0; i < Math.min(entries.length, 15); i++) {
+      const p = entries[i];
+      text += `${i + 1}. *${p.name} (${p.symbol})* — ${p.votes.toFixed(4)} JADE\n`;
     }
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
@@ -126,7 +134,7 @@ async function updateLeaderboard() {
       const data = await res.json();
       if (data.ok) {
         pinnedMessageId = data.result.message_id;
-        console.log("Leaderboard sent! PIN THIS → ID:", pinnedMessageId);
+        console.log("Leaderboard sent! PIN THIS MESSAGE → ID:", pinnedMessageId);
       }
     } else {
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
@@ -140,10 +148,11 @@ async function updateLeaderboard() {
   }
 }
 
+// Update every 60 seconds
 setInterval(updateLeaderboard, 60000);
-updateLeaderboard();
+updateLeaderboard(); // Run once on startup
 
-app.get('/', (req, res) => res.send('Jade Bot + Leaderboard Running'));
+app.get('/', (req, res) => res.send('Jade Bot + Live Leaderboard Running'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
