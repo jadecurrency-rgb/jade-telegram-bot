@@ -115,7 +115,7 @@ async function updateLeaderboard() {
     let text = `*Jade1 Live Leaderboard* — Round #${round}\n`;
     text += `Total Votes: *${totalVotes.toFixed(0)} JADE*\n\n`;
 
-    for (let i = 0; i < Math.min(entries.length, 15); i++) {
+    for (let i = 0; i < Math.min(entries.length, 20); i++) {
       const p = entries[i];
       text += `${i + 1}. *${p.name} (${p.symbol})* — ${p.votes.toFixed(4)} JADE\n`;
     }
