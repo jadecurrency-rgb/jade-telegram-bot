@@ -2,10 +2,19 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
+// ADD THESE 3 LINES — THIS FIXES CORS
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  next();
+});
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_IDS = [
-  process.env.CHANNEL_ID,   // your leaderboard channel
-  process.env.GROUP_ID      // @jadecurrency1
+  process.env.CHANNEL_ID,
+  process.env.GROUP_ID
 ].filter(Boolean);
 
 async function sendToTelegram(text) {
@@ -22,7 +31,7 @@ async function sendToTelegram(text) {
         })
       });
     } catch (err) {
-      console.error(`Failed to send to ${chatId}:`, err);
+      console.error(`Failed to send to ${chatId}:`, err.message);
     }
   }
 }
@@ -30,8 +39,9 @@ async function sendToTelegram(text) {
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol, round } = req.body;
-    const shortWallet = wallet.slice(0,6) + '...' + wallet.slice(-4);
+    console.log("VOTE RECEIVED →", { wallet, amount, projectName, projectSymbol, round });
 
+    const shortWallet = wallet.slice(0,6) + '...' + wallet.slice(-4);
     const message = `
 New Vote Detected!
 
@@ -46,7 +56,7 @@ https://jade1.io
     await sendToTelegram(message);
     res.json({ success: true });
   } catch (err) {
-    console.error(err);
+    console.error("Webhook error:", err);
     res.status(500).json({ error: 'failed' });
   }
 });
