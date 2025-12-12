@@ -3,20 +3,34 @@ const app = express();
 app.use(express.json());
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID;
+
+// List of places to send notifications
+const CHAT_IDS = [
+  process.env.CHANNEL_ID,        // your leaderboard channel (e.g. @jade1_leaderboard)
+  process.env.GROUP_ID          // your main group @jadecurrency1
+];
 
 async function sendToTelegram(text) {
   const url = `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`;
-  await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chat_id: CHANNEL_ID,
-      text: text,
-      parse_mode: 'Markdown',
-      disable_web_page_preview: true
-    })
-  });
+
+  for (const chatId of CHAT_IDS) {
+    if (!chatId) continue;
+
+    try {
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: text,
+          parse_mode: 'Markdown',
+          disable_web_page_preview: true
+        })
+      });
+    } catch (err) {
+      console.error(`Failed to send to ${chatId}:`, err);
+    }
+  }
 }
 
 app.post('/vote-webhook', async (req, res) => {
