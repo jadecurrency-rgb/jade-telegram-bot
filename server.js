@@ -20,14 +20,20 @@ const CHAT_IDS = [
 let ethers, provider, votingContract;
 try {
   ethers = require('ethers');
+
   provider = new ethers.JsonRpcProvider("https://bsc-dataseed.binance.org/");
   votingContract = new ethers.Contract(
     "0xaACd035063bb4c917E3171A5a05536A1D5a38548",
-    ["function getProjects() view returns (string[20], string[20], address[20], uint256[20])", "function currentRound() view returns (uint256)"],
+    [
+      "function getProjects() view returns (string[20], string[20], address[20], uint256[20])",
+      "function currentRound() view returns (uint256)"
+    ],
     provider
   );
+
+  console.log("Ethers v6 loaded — leaderboard enabled");
 } catch (err) {
-  console.error("Ethers not available (leaderboard disabled):", err.message);
+  console.error("Ethers failed (leaderboard disabled):", err.message);
 }
 
 let pinnedMessageId = null;
@@ -48,7 +54,7 @@ async function broadcastVote(message) {
   for (const chatId of CHAT_IDS) await sendToTelegram(chatId, message);
 }
 
-// Vote webhook — your working notifications
+// Vote webhook — notifications (working!)
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol, round } = req.body;
@@ -74,12 +80,9 @@ https://jade1.io
   }
 });
 
-// Safe leaderboard update
+// Safe leaderboard
 async function updateLeaderboard() {
-  if (!votingContract) {
-    console.log("Leaderboard skipped: ethers not loaded");
-    return;
-  }
+  if (!votingContract) return;
 
   try {
     const [roundBig, projects] = await Promise.all([
@@ -94,7 +97,7 @@ async function updateLeaderboard() {
     let totalVotes = 0;
     for (let i = 0; i < 20; i++) {
       if (names[i]?.trim()) {
-        const votes = Number(ethers.formatUnits(votesRaw[i] || 0, 18));
+        const votes = Number(ethers.formatUnits(votesRaw[i] || 0n, 18));
         totalVotes += votes;
         ranked.push({ rank: ranked.length + 1, name: names[i], symbol: symbols[i], votes: votes.toFixed(4) });
       }
@@ -105,7 +108,7 @@ async function updateLeaderboard() {
     let text = `*Jade1 Live Leaderboard* — Round #${round}\n`;
     text += `Total Votes: *${totalVotes.toFixed(0)} JADE*\n\n`;
 
-    for (const p of ranked.slice(0, 15)) {  // Top 15 to avoid too long
+    for (const p of ranked.slice(0, 15)) {
       text += `${p.rank}. *${p.name} (${p.symbol})* — ${p.votes} JADE\n`;
     }
 
@@ -123,7 +126,7 @@ async function updateLeaderboard() {
       const data = await res.json();
       if (data.ok) {
         pinnedMessageId = data.result.message_id;
-        console.log("Leaderboard sent! PIN THIS MESSAGE → ID:", pinnedMessageId);
+        console.log("Leaderboard sent! PIN THIS → ID:", pinnedMessageId);
       }
     } else {
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
@@ -133,13 +136,12 @@ async function updateLeaderboard() {
       });
     }
   } catch (err) {
-    console.error("Leaderboard update failed (non-crashing):", err.message);
+    console.error("Leaderboard failed (safe):", err.message);
   }
 }
 
-// Update every 60 seconds
 setInterval(updateLeaderboard, 60000);
-updateLeaderboard(); // First run
+updateLeaderboard();
 
 app.get('/', (req, res) => res.send('Jade Bot + Leaderboard Running'));
 
