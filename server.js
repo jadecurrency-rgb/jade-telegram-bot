@@ -23,7 +23,7 @@ try {
 
   provider = new ethers.JsonRpcProvider("https://bsc-dataseed.binance.org/");
   votingContract = new ethers.Contract(
-    "0xaACd035063bb4c917E3171A5a05536A1D5a38548",
+    "0x0B9132828a95E0e5981A7FED298A3aa8458baeB8",
     [
       "function getProjects() view returns (string[20], string[20], address[20], uint256[20])",
       "function currentRound() view returns (uint256)"
