@@ -17,7 +17,7 @@ Used JADE token real time balance to calculate voting totals of top trending BNB
 - *(add more if supported)*  
 
 ## Contract Addresses
-Voting contract: changes weekly: 0x0B9132828a95E0e5981A7FED298A3aa8458baeB8
+Voting contract: changes weekly:0x1144eCa36680aE3fA7a2146b67F0db81A38ac403
 single-side staking contract: 0x0A468b1917aa086B474D5502C732c638237211EC
 Lp farm contract: 0xFa435cc7b37A1E3E404bBE082D48d83F2fAA3d10
 
