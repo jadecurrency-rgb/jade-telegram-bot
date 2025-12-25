@@ -1,99 +1,16 @@
-const express = require('express');
-const app = express();
-app.use(express.json());
-
-// CORS
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  next();
-});
-
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const CHAT_IDS = [
-  process.env.CHANNEL_ID,
-  process.env.GROUP_ID
-].filter(Boolean);
-
-let ethers, provider, votingContract;
-try {
-  ethers = require('ethers');
-
-  provider = new ethers.JsonRpcProvider("https://bsc-dataseed.binance.org/");
-  votingContract = new ethers.Contract(
-    "0x1144eCa36680aE3fA7a2146b67F0db81A38ac403",
-    [
-      "function getProjects() view returns (string[20], string[20], address[20], uint256[20])",
-      "function currentRound() view returns (uint256)"
-    ],
-    provider
-  );
-
-  console.log("Ethers v6 loaded — leaderboard enabled");
-} catch (err) {
-  console.error("Ethers failed (leaderboard disabled):", err.message);
-}
-
-let pinnedMessageId = null;
-
-async function sendToTelegram(chatId, text, parse_mode = "Markdown") {
-  try {
-    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode, disable_web_page_preview: true })
-    });
-  } catch (err) {
-    console.error(`Send failed to ${chatId}:`, err.message);
-  }
-}
-
-async function broadcastVote(message) {
-  for (const chatId of CHAT_IDS) await sendToTelegram(chatId, message);
-}
-
-// Vote webhook — instant notifications (already working!)
-app.post('/vote-webhook', async (req, res) => {
-  try {
-    const { wallet, amount, projectName, projectSymbol, round } = req.body;
-    console.log("VOTE RECEIVED →", { wallet, amount, projectName, projectSymbol, round });
-
-    const shortWallet = wallet.slice(0,6) + '...' + wallet.slice(-4);
-    const message = `
-🗳 *New Vote Detected!*
-
-Wallet: \`${shortWallet}\`
-Power: *${parseFloat(amount).toFixed(4)} JADE*
-Project: *${projectName} (${projectSymbol})*
-Round: #${round}
-
-https://jade1.io
-    `.trim();
-
-    await broadcastVote(message);
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Webhook error:", err);
-    res.status(500).json({ error: 'failed' });
-  }
-});
-
 // Safe leaderboard update - FORCED to Round 2
 async function updateLeaderboard() {
   if (!votingContract) return;
 
   try {
-    // Force Round 2 instead of reading from contract
+    // Force Round 2
     const round = "2";
 
-    const [_, projects] = await Promise.all([
-      // We skip currentRound() call since we're forcing the value
-      votingContract.getProjects()
-    ]);
+    // Directly call getProjects() — no need for Promise.all anymore
+    const projects = await votingContract.getProjects();
 
-    const [names, symbols, _, votesRaw] = projects;
+    // Skip unused address array with comma
+    const [names, symbols, , votesRaw] = projects;
 
     // Collect all valid projects
     const entries = [];
@@ -113,7 +30,7 @@ async function updateLeaderboard() {
     // Sort by votes descending
     entries.sort((a, b) => b.votes - a.votes);
 
-    // Build formatted leaderboard with forced Round #2
+    // Build formatted leaderboard
     let text = `*Jade1 Live Leaderboard* — Round #${round}\n`;
     text += `Total Votes: *${totalVotes.toFixed(0)} JADE*\n\n`;
 
@@ -149,14 +66,3 @@ async function updateLeaderboard() {
     console.error("Leaderboard failed (safe):", err.message);
   }
 }
-
-// Update every 60 seconds
-setInterval(updateLeaderboard, 60000);
-updateLeaderboard(); // Run once on startup
-
-app.get('/', (req, res) => res.send('Jade Bot + Live Leaderboard Running'));
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log('Server running on port ' + PORT);
-});
