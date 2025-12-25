@@ -17,24 +17,15 @@ const CHAT_IDS = [
   process.env.GROUP_ID
 ].filter(Boolean);
 
-// === MANUAL ROUND OVERRIDE (temporary) ===
-const MANUAL_ROUND_OVERRIDE = "2";   // ← set to null or "" when contract is reliable
-// ========================================
+// === MANUAL ROUND OVERRIDE - FORCE ROUND 2 ===
+const MANUAL_ROUND_OVERRIDE = "2";   // Remove or set to null when you want on-chain value again
+// =============================================
 
 let ethers, provider, votingContract;
 try {
   ethers = require('ethers');
 
-  // Reliable fallback RPCs — this fixes most "stopped updating" issues
-  provider = new ethers.FallbackProvider([
-    "https://bsc-dataseed.binance.org/",
-    "https://bsc-dataseed1.defibit.io/",
-    "https://bsc-dataseed1.ninicoin.io/",
-    "https://bsc-dataseed2.binance.org/",
-    "https://bsc-dataseed3.binance.org/",
-    "https://bsc-dataseed4.binance.org/"
-  ], 1); // quorum = 1 for speed
-
+  provider = new ethers.JsonRpcProvider("https://bsc-dataseed.binance.org/");
   votingContract = new ethers.Contract(
     "0x1144eCa36680aE3fA7a2146b67F0db81A38ac403",
     [
@@ -44,21 +35,20 @@ try {
     provider
   );
 
-  console.log("Ethers v6 loaded with FallbackProvider — leaderboard enabled");
+  console.log("Ethers v6 loaded — leaderboard enabled");
 } catch (err) {
-  console.error("Ethers initialization failed (leaderboard disabled):", err);
+  console.error("Ethers failed (leaderboard disabled):", err.message);
 }
 
 let pinnedMessageId = null;
 
 async function sendToTelegram(chatId, text, parse_mode = "Markdown") {
   try {
-    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text, parse_mode, disable_web_page_preview: true })
     });
-    if (!res.ok) throw new Error(`Telegram send failed: ${res.status} - ${await res.text()}`);
   } catch (err) {
     console.error(`Send failed to ${chatId}:`, err.message);
   }
@@ -68,7 +58,7 @@ async function broadcastVote(message) {
   for (const chatId of CHAT_IDS) await sendToTelegram(chatId, message);
 }
 
-// Vote webhook (unchanged)
+// Vote webhook — instant notifications (already working!)
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol, round } = req.body;
@@ -94,43 +84,28 @@ https://jade1.io
   }
 });
 
-// Helper: try contract call with retry
-async function tryContractCall(fn, maxRetries = 2) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      console.warn(`Contract call attempt ${attempt} failed:`, err.message);
-      if (attempt === maxRetries) throw err;
-      await new Promise(r => setTimeout(r, 2000)); // wait 2s before retry
-    }
-  }
-}
-
-// Leaderboard update with better resilience
+// Safe leaderboard update with MANUAL ROUND OVERRIDE
 async function updateLeaderboard() {
-  if (!votingContract) {
-    console.warn("votingContract not initialized — skipping update");
-    return;
-  }
+  if (!votingContract) return;
 
   try {
     let round;
-
+    
     if (MANUAL_ROUND_OVERRIDE) {
       round = MANUAL_ROUND_OVERRIDE;
-      console.log(`[MANUAL] Using fixed round: #${round}`);
     } else {
-      const roundBig = await tryContractCall(() => votingContract.currentRound());
+      const roundBig = await votingContract.currentRound();
       round = roundBig.toString();
-      console.log(`[ON-CHAIN] Current round: #${round}`);
     }
 
-    const projects = await tryContractCall(() => votingContract.getProjects());
+    const [, projects] = await Promise.all([
+      // roundBig already handled above
+      votingContract.getProjects()
+    ]);
 
     const [names, symbols, _, votesRaw] = projects;
 
-    // Collect valid projects
+    // Collect all valid projects
     const entries = [];
     let totalVotes = 0;
     for (let i = 0; i < 20; i++) {
@@ -138,15 +113,17 @@ async function updateLeaderboard() {
         const votes = Number(ethers.formatUnits(votesRaw[i] || 0n, 18));
         totalVotes += votes;
         entries.push({
-          name: names[i].trim(),
-          symbol: symbols[i].trim(),
-          votes
+          name: names[i],
+          symbol: symbols[i],
+          votes: votes
         });
       }
     }
 
+    // Sort by votes descending
     entries.sort((a, b) => b.votes - a.votes);
 
+    // Build formatted leaderboard
     let text = `*Jade1 Live Leaderboard* — Round #${round}\n`;
     text += `Total Votes: *${totalVotes.toFixed(0)} JADE*\n\n`;
 
@@ -158,12 +135,8 @@ async function updateLeaderboard() {
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
     const leaderboardChat = process.env.CHANNEL_ID;
-    if (!leaderboardChat) {
-      console.warn("CHANNEL_ID not set — skipping Telegram update");
-      return;
-    }
+    if (!leaderboardChat) return;
 
-    // Send new or edit existing
     if (!pinnedMessageId) {
       const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         method: 'POST',
@@ -173,38 +146,27 @@ async function updateLeaderboard() {
       const data = await res.json();
       if (data.ok) {
         pinnedMessageId = data.result.message_id;
-        console.log("New leaderboard sent & should be pinned → ID:", pinnedMessageId);
-      } else {
-        console.error("Send failed:", data);
+        console.log("Leaderboard sent! PIN THIS MESSAGE → ID:", pinnedMessageId);
       }
     } else {
-      try {
-        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: leaderboardChat, message_id: pinnedMessageId, text, parse_mode: 'Markdown' })
-        });
-        console.log("Leaderboard edited successfully");
-      } catch (editErr) {
-        console.error("Edit failed — resetting pinnedMessageId:", editErr.message);
-        pinnedMessageId = null; // next time send new one
-      }
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: leaderboardChat, message_id: pinnedMessageId, text, parse_mode: 'Markdown' })
+      });
     }
   } catch (err) {
-    console.error("Leaderboard update failed:", err);
-    console.error("Full stack:", err.stack);
-    if (err.code) console.error("Error code:", err.code);
-    if (err.reason) console.error("Revert reason:", err.reason);
+    console.error("Leaderboard failed (safe):", err.message);
   }
 }
 
-// Run every 60 seconds
+// Update every 60 seconds
 setInterval(updateLeaderboard, 60000);
-updateLeaderboard(); // initial run
+updateLeaderboard(); // Run once on startup
 
 app.get('/', (req, res) => res.send('Jade Bot + Live Leaderboard Running'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log('Server running on port ' + PORT);
 });
