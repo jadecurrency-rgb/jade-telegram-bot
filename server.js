@@ -17,10 +17,6 @@ const CHAT_IDS = [
   process.env.GROUP_ID
 ].filter(Boolean);
 
-// === MANUAL ROUND OVERRIDE - FORCE ROUND 2 ===
-const MANUAL_ROUND_OVERRIDE = "2";   // Remove or set to null when you want on-chain value again
-// =============================================
-
 let ethers, provider, votingContract;
 try {
   ethers = require('ethers');
@@ -84,22 +80,16 @@ https://jade1.io
   }
 });
 
-// Safe leaderboard update with MANUAL ROUND OVERRIDE
+// Safe leaderboard update - FORCED to Round 2
 async function updateLeaderboard() {
   if (!votingContract) return;
 
   try {
-    let round;
-    
-    if (MANUAL_ROUND_OVERRIDE) {
-      round = MANUAL_ROUND_OVERRIDE;
-    } else {
-      const roundBig = await votingContract.currentRound();
-      round = roundBig.toString();
-    }
+    // Force Round 2 instead of reading from contract
+    const round = "2";
 
-    const [, projects] = await Promise.all([
-      // roundBig already handled above
+    const [_, projects] = await Promise.all([
+      // We skip currentRound() call since we're forcing the value
       votingContract.getProjects()
     ]);
 
@@ -123,7 +113,7 @@ async function updateLeaderboard() {
     // Sort by votes descending
     entries.sort((a, b) => b.votes - a.votes);
 
-    // Build formatted leaderboard
+    // Build formatted leaderboard with forced Round #2
     let text = `*Jade1 Live Leaderboard* — Round #${round}\n`;
     text += `Total Votes: *${totalVotes.toFixed(0)} JADE*\n\n`;
 
