@@ -80,42 +80,52 @@ https://jade1.io
   }
 });
 
-// Leaderboard update - Using HARDCODED Round 3 data from jade1.io (contract not updated yet)
+// Leaderboard update - LIVE rankings from on-chain + forced Round 3 display
 async function updateLeaderboard() {
+  if (!votingContract) {
+    console.log("Voting contract not available - skipping update");
+    return;
+  }
+
   try {
+    // Force Round 3 display to match jade1.io (website is on Round 3)
     const displayRound = "3";
-    console.log(`[Leaderboard] Displaying Round #${displayRound} - using jade1.io current top 20`);
+    console.log(`[Leaderboard] Using display Round #${displayRound} (jade1.io current)`);
 
-    // HARDCODED from https://jade1.io (Dec 28, 2025) - all votes 0 at round start
-    const entries = [
-      { name: "TokenFi", symbol: "TOKEN", votes: 0 },
-      { name: "雪球", symbol: "雪球", votes: 0 },
-      { name: "国内真正的鲸鱼", symbol: "马屁鲸", votes: 0 },
-      { name: "ARK", symbol: "ARK", votes: 0 },
-      { name: "坚持很酷", symbol: "坚持很酷", votes: 0 },
-      { name: "Dongtian", symbol: "DONGTIAN", votes: 0 },
-      { name: "SHISA 30", symbol: "SHISA", votes: 0 },
-      { name: "WebKey DAO", symbol: "wkeyDAO", votes: 0 },
-      { name: "POCHITA 10", symbol: "Pochita", votes: 0 },
-      { name: "Donkey", symbol: "Donkey", votes: 0 },
-      { name: "PRIME", symbol: "$PRIME", votes: 0 },
-      { name: "最诡异的微博账号", symbol: "拉大便", votes: 0 },
-      { name: "中国时代", symbol: "中国时代", votes: 0 },
-      { name: "Book Of BSC", symbol: "BOB", votes: 0 },
-      { name: "STBL_Token - STBL Governance Token", symbol: "STBL", votes: 0 },
-      { name: "CREPE", symbol: "CREPE", votes: 0 },
-      { name: "4", symbol: "4", votes: 0 },
-      { name: "WIKI CAT", symbol: "WKC", votes: 0 },
-      { name: "quq", symbol: "quq", votes: 0 },
-      { name: "Aster", symbol: "ASTER", votes: 0 }
-    ];
+    // Fetch real-time data from contract
+    const projects = await votingContract.getProjects();
+    const [names, symbols, , votesRaw] = projects;
 
-    let totalVotes = 0;
+    // Collect valid projects
+    const entries = [];
+    let totalVotes = 0n;
 
-    // Build leaderboard text
+    for (let i = 0; i < 20; i++) {
+      const name = names[i]?.trim();
+      const symbol = symbols[i]?.trim();
+      if (name && name.length > 0) {
+        const votesBig = votesRaw[i] || 0n;
+        const votes = Number(ethers.formatUnits(votesBig, 18));
+        totalVotes += votesBig;
+        entries.push({
+          name,
+          symbol,
+          votes
+        });
+      }
+    }
+
+    // Sort by votes descending → this enables LIVE ranking changes!
+    entries.sort((a, b) => b.votes - a.votes);
+
+    // Build message
     let text = `*Jade1 Live Leaderboard* — Round #${displayRound}\n`;
-    text += `Total Votes: *${totalVotes.toFixed(0)} JADE*\n\n`;
-    text += `⚠️ Round 3 just started — votes reset to zero!\nStake JADE and vote on https://jade1.io\nLeaderboard will update as votes come in.\n\n`;
+    text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
+
+    // Zero votes warning (common at new round start)
+    if (totalVotes === 0n) {
+      text += `⚠️ Round 3 just started — votes reset to zero!\nStake JADE & vote on https://jade1.io\nRankings will update live as votes come in.\n\n`;
+    }
 
     entries.forEach((p, i) => {
       text += `${i + 1}. *${p.name} (${p.symbol})* — ${p.votes.toFixed(4)} JADE\n`;
@@ -125,7 +135,7 @@ async function updateLeaderboard() {
 
     const leaderboardChat = process.env.CHANNEL_ID;
     if (!leaderboardChat) {
-      console.log("CHANNEL_ID not set - skipping leaderboard update");
+      console.log("CHANNEL_ID not set - cannot update leaderboard");
       return;
     }
 
@@ -144,12 +154,12 @@ async function updateLeaderboard() {
       const data = await res.json();
       if (data.ok) {
         pinnedMessageId = data.result.message_id;
-        console.log(`Initial leaderboard sent. Message ID: ${pinnedMessageId} (pin it manually if needed)`);
+        console.log(`Initial leaderboard sent. Message ID: ${pinnedMessageId} (pin manually if needed)`);
       } else {
-        console.error("Failed to send initial leaderboard:", data.description || data);
+        console.error("Send failed:", data.description || data);
       }
     } else {
-      // Edit existing message
+      // Update existing pinned message
       const editRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -162,19 +172,19 @@ async function updateLeaderboard() {
       });
       const editData = await editRes.json();
       if (editData.ok) {
-        console.log("Leaderboard updated successfully");
+        console.log("Leaderboard updated successfully (live rankings refreshed)");
       } else {
         console.error("Edit failed:", editData.description || editData);
       }
     }
   } catch (err) {
-    console.error("Leaderboard update failed:", err.message);
+    console.error("Leaderboard update error:", err.message);
   }
 }
 
-// Update every 60 seconds + initial call
+// Update every 60 seconds + run immediately
 setInterval(updateLeaderboard, 60000);
-updateLeaderboard(); // Run immediately
+updateLeaderboard();
 
 app.get('/', (req, res) => res.send('Jade Bot + Live Leaderboard Running'));
 
