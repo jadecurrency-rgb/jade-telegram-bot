@@ -80,7 +80,7 @@ https://jade1.io
   }
 });
 
-// Safe leaderboard update - FORCED to Round 2
+// Safe leaderboard update - FORCED to Round 3
 async function updateLeaderboard() {
   if (!votingContract) return;
 
