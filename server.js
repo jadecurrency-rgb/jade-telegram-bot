@@ -23,7 +23,7 @@ try {
 
   provider = new ethers.JsonRpcProvider("https://bsc-dataseed.binance.org/");
   votingContract = new ethers.Contract(
-    "0x1144eCa36680aE3fA7a2146b67F0db81A38ac403",
+    "0x8613481dBe0162ceA781f545B59901f76226954a",
     [
       "function getProjects() view returns (string[20], string[20], address[20], uint256[20])",
       "function currentRound() view returns (uint256)"
@@ -67,7 +67,7 @@ app.post('/vote-webhook', async (req, res) => {
 Wallet: \`${shortWallet}\`
 Power: *${parseFloat(amount).toFixed(4)} JADE*
 Project: *${projectName} (${projectSymbol})*
-Round: #${round}
+Round: #3
 
 https://jade1.io
     `.trim();
@@ -85,8 +85,8 @@ async function updateLeaderboard() {
   if (!votingContract) return;
 
   try {
-    // Force Round 2
-    const round = "2";
+    // Force Round 3
+    const round = "3";
 
     // Get only projects (skip currentRound call)
     const projects = await votingContract.getProjects();
@@ -112,7 +112,7 @@ async function updateLeaderboard() {
     // Sort by votes descending
     entries.sort((a, b) => b.votes - a.votes);
 
-    // Build formatted leaderboard with forced Round #2
+    // Build formatted leaderboard with forced Round #3
     let text = `*Jade1 Live Leaderboard* — Round #${round}\n`;
     text += `Total Votes: *${totalVotes.toFixed(0)} JADE*\n\n`;
 
