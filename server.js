@@ -54,7 +54,7 @@ async function broadcastVote(message) {
   for (const chatId of CHAT_IDS) await sendToTelegram(chatId, message);
 }
 
-// Vote webhook — instant notifications (already working!)
+// Vote webhook — instant notifications
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol, round } = req.body;
@@ -80,21 +80,22 @@ https://jade1.io
   }
 });
 
-// Safe leaderboard update - FORCED to Round 3
+// Leaderboard update - FORCED to display Round 3 (matches jade1.io)
 async function updateLeaderboard() {
   if (!votingContract) return;
 
   try {
-    // Force Round 3
-    const round = "3";
+    // Force display Round 3 to align with jade1.io website
+    const displayRound = "3";
+    console.log(`[Leaderboard] Forcing display to Round #${displayRound} (per jade1.io)`);
 
-    // Get only projects (skip currentRound call)
+    // Fetch real-time projects from contract
     const projects = await votingContract.getProjects();
 
-    // Destructure - use commas to skip unused values
+    // Destructure: names, symbols, addresses (skipped), votesRaw
     const [names, symbols, , votesRaw] = projects;
 
-    // Collect all valid projects
+    // Collect valid entries
     const entries = [];
     let totalVotes = 0;
     for (let i = 0; i < 20; i++) {
@@ -102,18 +103,18 @@ async function updateLeaderboard() {
         const votes = Number(ethers.formatUnits(votesRaw[i] || 0n, 18));
         totalVotes += votes;
         entries.push({
-          name: names[i],
-          symbol: symbols[i],
+          name: names[i].trim(),
+          symbol: symbols[i].trim(),
           votes: votes
         });
       }
     }
 
-    // Sort by votes descending
+    // Sort descending by votes
     entries.sort((a, b) => b.votes - a.votes);
 
-    // Build formatted leaderboard with forced Round #3
-    let text = `*Jade1 Live Leaderboard* — Round #${round}\n`;
+    // Build message
+    let text = `*Jade1 Live Leaderboard* — Round #${displayRound}\n`;
     text += `Total Votes: *${totalVotes.toFixed(0)} JADE*\n\n`;
 
     for (let i = 0; i < Math.min(entries.length, 20); i++) {
@@ -124,38 +125,57 @@ async function updateLeaderboard() {
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
     const leaderboardChat = process.env.CHANNEL_ID;
-    if (!leaderboardChat) return;
+    if (!leaderboardChat) {
+      console.log("No CHANNEL_ID set - skipping leaderboard update");
+      return;
+    }
 
     if (!pinnedMessageId) {
+      // First time: send new message
       const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: leaderboardChat, text, parse_mode: 'Markdown' })
+        body: JSON.stringify({ 
+          chat_id: leaderboardChat, 
+          text, 
+          parse_mode: 'Markdown',
+          disable_web_page_preview: true 
+        })
       });
       const data = await res.json();
       if (data.ok) {
         pinnedMessageId = data.result.message_id;
-        console.log("Leaderboard sent! PIN THIS MESSAGE → ID:", pinnedMessageId);
+        console.log(`Leaderboard pinned! Message ID: ${pinnedMessageId}`);
+      } else {
+        console.error("Failed to send initial leaderboard:", data);
       }
     } else {
+      // Update existing pinned message
       await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: leaderboardChat, message_id: pinnedMessageId, text, parse_mode: 'Markdown' })
+        body: JSON.stringify({ 
+          chat_id: leaderboardChat, 
+          message_id: pinnedMessageId, 
+          text, 
+          parse_mode: 'Markdown' 
+        })
       });
+      console.log("Leaderboard updated successfully");
     }
   } catch (err) {
-    console.error("Leaderboard failed (safe):", err.message);
+    console.error("Leaderboard update failed:", err.message);
   }
 }
 
-// Update every 60 seconds
+// Run leaderboard update every 60 seconds
 setInterval(updateLeaderboard, 60000);
-updateLeaderboard(); // Run once on startup
+updateLeaderboard(); // Run immediately on startup
 
+// Health check endpoint
 app.get('/', (req, res) => res.send('Jade Bot + Live Leaderboard Running'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log('Server running on port ' + PORT);
+  console.log(`Server running on port ${PORT}`);
 });
