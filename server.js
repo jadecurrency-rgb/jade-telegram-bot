@@ -17,14 +17,37 @@ const CHAT_IDS = [
   process.env.GROUP_ID
 ].filter(Boolean);
 
+// More reliable RPCs with fallback (Dec 2025 status)
+const RPC_URLS = [
+  "https://bsc.publicnode.com",
+  "https://bsc-dataseed.binance.org/",
+  "https://bsc-dataseed2.binance.org/",
+  "https://bsc-dataseed3.binance.org/",
+  "https://rpc.ankr.com/bsc"
+];
+
 let ethers, provider, votingContract;
+
 try {
   ethers = require('ethers');
 
-  // Fresher RPC endpoint
-  const rpcUrl = "https://bsc-dataseed1.binance.org/";
-  provider = new ethers.JsonRpcProvider(rpcUrl);
-  console.log(`[INFO] Using RPC: ${rpcUrl}`);
+  // Try connecting to RPCs one by one
+  for (const url of RPC_URLS) {
+    try {
+      const tempProvider = new ethers.JsonRpcProvider(url);
+      // Quick validation
+      await tempProvider.getBlockNumber();
+      provider = tempProvider;
+      console.log(`[SUCCESS] Connected to RPC: ${url}`);
+      break;
+    } catch (e) {
+      console.warn(`[SKIP] RPC failed: ${url} → ${e.message}`);
+    }
+  }
+
+  if (!provider) {
+    throw new Error("All RPC endpoints failed. Bot cannot read blockchain data.");
+  }
 
   votingContract = new ethers.Contract(
     "0x8613481dBe0162ceA781f545B59901f76226954a",
@@ -35,9 +58,10 @@ try {
     provider
   );
 
-  console.log("[INFO] Ethers v6 loaded — leaderboard enabled");
+  console.log("[INFO] Ethers v6 loaded + contract initialized — leaderboard enabled");
 } catch (err) {
-  console.error("[ERROR] Ethers initialization failed:", err.message);
+  console.error("[CRITICAL] Ethers/contract initialization failed:", err.message);
+  console.error(err);
 }
 
 let pinnedMessageId = null;
@@ -47,18 +71,26 @@ async function sendToTelegram(chatId, text, parse_mode = "Markdown") {
     const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode, disable_web_page_preview: true })
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode,
+        disable_web_page_preview: true
+      })
     });
     const data = await response.json();
-    console.log(`[DEBUG] Send to Telegram response: ${JSON.stringify(data)}`);
+    console.log(`[TELEGRAM] Send response for ${chatId}: ${JSON.stringify(data)}`);
     return data;
   } catch (err) {
-    console.error(`[ERROR] Send failed to ${chatId}:`, err.message);
+    console.error(`[ERROR] Telegram send failed to ${chatId}:`, err.message);
+    return null;
   }
 }
 
 async function broadcastVote(message) {
-  for (const chatId of CHAT_IDS) await sendToTelegram(chatId, message);
+  for (const chatId of CHAT_IDS) {
+    if (chatId) await sendToTelegram(chatId, message);
+  }
 }
 
 app.post('/vote-webhook', async (req, res) => {
@@ -81,41 +113,46 @@ https://jade1.io
     await broadcastVote(message);
     res.json({ success: true });
   } catch (err) {
-    console.error("[ERROR] Webhook error:", err);
+    console.error("[ERROR] Webhook processing failed:", err.message);
     res.status(500).json({ error: 'failed' });
   }
 });
 
-// Main leaderboard function with heavy debugging
 async function updateLeaderboard() {
-  if (!votingContract) {
-    console.log("[DEBUG] Voting contract not available - skipping update");
+  if (!votingContract || !provider) {
+    console.log("[WARNING] Cannot update leaderboard — contract/provider not available");
     return;
   }
 
   try {
-    console.log("[DEBUG] Starting leaderboard update for Round #3");
+    console.log("[DEBUG] Starting leaderboard update — Round #3");
 
+    console.log("[DEBUG] Calling getProjects()...");
     const projects = await votingContract.getProjects();
+    console.log("[DEBUG] getProjects() returned successfully");
+
     const [names, symbols, addresses, votesRaw] = projects;
 
-    // Debug: Show what we actually received from contract
+    // Safety check
+    if (!Array.isArray(names) || names.length === 0) {
+      throw new Error("getProjects returned invalid or empty names array");
+    }
+
     console.log("[DEBUG] Raw names array length:", names.length);
-    const first5Names = names.slice(0, 5).map(n => n?.trim() || '[EMPTY]').join(", ");
-    console.log("[DEBUG] Fetched first 5 project names:", first5Names);
-    console.log("[DEBUG] First project symbol:", symbols[0]?.trim() || '[EMPTY]');
-    console.log("[DEBUG] First project address:", addresses[0] || '[EMPTY]');
-    console.log("[DEBUG] First project raw votes:", votesRaw[0]?.toString() || '0');
+    console.log("[DEBUG] First 5 project names:", names.slice(0, 5).map(n => n?.trim() || '[EMPTY]').join(", "));
+    console.log("[DEBUG] First symbol:", symbols[0]?.trim() || '[EMPTY]');
+    console.log("[DEBUG] First votes raw:", votesRaw[0]?.toString() || '0');
 
     const entries = [];
     let totalVotes = 0n;
 
     for (let i = 0; i < 20; i++) {
-      const name = names[i]?.trim();
-      if (name && name.length > 0) {
+      const name = names[i]?.trim?.() || "";
+      if (name.length > 0 && name !== "") {
         const votesBig = votesRaw[i] || 0n;
         const votes = Number(ethers.formatUnits(votesBig, 18));
         totalVotes += votesBig;
+
         entries.push({
           name,
           symbol: symbols[i]?.trim() || '???',
@@ -124,20 +161,19 @@ async function updateLeaderboard() {
       }
     }
 
-    console.log("[DEBUG] Total valid projects extracted:", entries.length);
+    console.log("[DEBUG] Valid projects found:", entries.length);
 
-    // Sort for live ranking changes (will update when votes > 0)
     entries.sort((a, b) => b.votes - a.votes);
 
     let text = `*Jade1 Live Leaderboard* — Round #3\n`;
     text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
 
     if (entries.length === 0 || totalVotes === 0n) {
-      text += `⚠️ Round 3 active — votes reset to zero!\nStake JADE & vote on https://jade1.io\nRankings update live as votes accumulate.\n\n`;
+      text += `⚠️ Round 3 active — votes reset to zero or no projects loaded yet!\nStake JADE & vote on https://jade1.io\nRankings update live as votes accumulate.\n\n`;
     }
 
     if (entries.length === 0) {
-      text += `[DEBUG] No projects loaded from contract - possible RPC lag or update pending\n`;
+      text += `[INFO] No projects loaded from contract — possible round transition or RPC issue\n`;
     } else {
       entries.forEach((p, i) => {
         text += `${i + 1}. *${p.name} (${p.symbol})* — ${p.votes.toFixed(4)} JADE\n`;
@@ -148,7 +184,7 @@ async function updateLeaderboard() {
 
     const leaderboardChat = process.env.CHANNEL_ID;
     if (!leaderboardChat) {
-      console.log("[DEBUG] CHANNEL_ID not set - cannot update");
+      console.log("[WARNING] CHANNEL_ID not set — skipping leaderboard update");
       return;
     }
 
@@ -156,32 +192,39 @@ async function updateLeaderboard() {
       const data = await sendToTelegram(leaderboardChat, text);
       if (data?.ok) {
         pinnedMessageId = data.result.message_id;
-        console.log(`[DEBUG] New leaderboard sent - Message ID: ${pinnedMessageId} (pin manually)`);
+        console.log(`[INFO] New leaderboard sent — pinned message ID: ${pinnedMessageId} (pin manually if needed)`);
       }
     } else {
       const editResponse = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chat_id: leaderboardChat, message_id: pinnedMessageId, text, parse_mode: 'Markdown' })
+        body: JSON.stringify({
+          chat_id: leaderboardChat,
+          message_id: pinnedMessageId,
+          text,
+          parse_mode: 'Markdown'
+        })
       });
       const editData = await editResponse.json();
-      console.log(`[DEBUG] Edit response: ${JSON.stringify(editData)}`);
-      if (editData.ok) {
-        console.log("[DEBUG] Leaderboard successfully updated");
+      console.log(`[DEBUG] EditMessageText response: ${JSON.stringify(editData)}`);
+
+      if (!editData.ok) {
+        console.error("[ERROR] Failed to edit pinned message:", editData.description || editData);
       } else {
-        console.error("[ERROR] Edit failed:", editData.description || editData);
+        console.log("[SUCCESS] Leaderboard updated successfully");
       }
     }
   } catch (err) {
-    console.error("[ERROR] Leaderboard update failed:", err.message);
+    console.error("[ERROR] Leaderboard update failed:", err.shortMessage || err.message);
+    console.error(err);
   }
 }
 
-// Update every 60 seconds + initial run
+// Run immediately + every 60 seconds
 setInterval(updateLeaderboard, 60000);
 updateLeaderboard();
 
-app.get('/', (req, res) => res.send('Jade Bot + Live Leaderboard Running'));
+app.get('/', (req, res) => res.send('Jade Bot + Live Leaderboard Running (Dec 2025 version)'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
