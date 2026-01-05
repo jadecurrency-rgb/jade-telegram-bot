@@ -50,7 +50,7 @@ try {
   }
 
   votingContract = new ethers.Contract(
-    "0x8613481dBe0162ceA781f545B59901f76226954a",
+    "0xD987b9869292B77655cde5A4Ab2EBA64C4659D03",
     [
       "function getProjects() view returns (string[20], string[20], address[20], uint256[20])",
       "function currentRound() view returns (uint256)"
@@ -125,7 +125,7 @@ async function updateLeaderboard() {
   }
 
   try {
-    console.log("[DEBUG] Starting leaderboard update — Round #3");
+    console.log("[DEBUG] Starting leaderboard update — Round #4");
 
     console.log("[DEBUG] Calling getProjects()...");
     const projects = await votingContract.getProjects();
@@ -165,11 +165,11 @@ async function updateLeaderboard() {
 
     entries.sort((a, b) => b.votes - a.votes);
 
-    let text = `*Jade1 Live Leaderboard* — Round #3\n`;
+    let text = `*Jade1 Live Leaderboard* — Round #4\n`;
     text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
 
     if (entries.length === 0 || totalVotes === 0n) {
-      text += `⚠️ Round 3 active — votes reset to zero or no projects loaded yet!\nStake JADE & vote on https://jade1.io\nRankings update live as votes accumulate.\n\n`;
+      text += `⚠️ Round 4 active — votes reset to zero or no projects loaded yet!\nStake JADE & vote on https://jade1.io\nRankings update live as votes accumulate.\n\n`;
     }
 
     if (entries.length === 0) {
