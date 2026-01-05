@@ -14,21 +14,64 @@ app.use((req, res, next) => {
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_IDS = [process.env.CHANNEL_ID, process.env.GROUP_ID].filter(Boolean);
 
-// Most reliable/fast-syncing free BSC RPCs in early 2026 (publicnode & ankr sync newest state quickest)
+// Reliable RPCs (prioritized fast ones)
 const RPC_URLS = [
   "https://bsc-rpc.publicnode.com",
   "https://bsc.publicnode.com",
   "https://rpc.ankr.com/bsc",
   "https://bscrpc.com",
-  "https://bsc-dataseed.binance.org/",
-  "https://bsc-dataseed1.defibit.io",
-  "https://bsc-dataseed1.ninicoin.io",
-  "https://bsc-dataseed2.binance.org/",
-  "https://bsc-dataseed3.binance.org/",
-  "https://bsc-dataseed4.binance.org/"
+  "https://bsc-dataseed.binance.org/"
 ];
 
 const ethers = require('ethers');
+
+// JADE token address (from contract constructor)
+const JADE_ADDRESS = "0x330F4fe5ef44B4d0742fE8BED8ca5E29359870DF";
+
+// Hardcoded Round 4 projects (exact order from jade1.io + your setProjects)
+const PROJECTS = [
+  { name: "DOYR", symbol: "DOYR", addr: "0x925c8Ab7A9a8a148E87CD7f1EC7ECc3625864444" },
+  { name: "Happy-Sci", symbol: "HAPPY-SCI", addr: "0x03173FBcC63b5f27A6b3d25e03d426d143647777" },
+  { name: "ZygoSwap", symbol: "ZSWAP", addr: "0x2e44aB95549b8a12AFDB970bde5A6a78365e4444" },
+  { name: "4", symbol: "4", addr: "0x0A43fC31a73013089DF59194872Ecae4cAe14444" },
+  { name: "人生K线", symbol: "人生K线", addr: "0x1a1E69F1e6182e2F8b9e8987E83C016ac9444444" },
+  { name: "WIKI CAT", symbol: "WKC", addr: "0x6Ec90334d89dBdc89E08A133271be3d104128Edb" },
+  { name: "CZ'S DOG", symbol: "Broccoli", addr: "0x6d5AD1592ed9D6D1dF9b93c793AB759573Ed6714" },
+  { name: "SHIVA INU", symbol: "SHVA", addr: "0x56aDF7C4f03c093323999d104815A03b3Bb54444" },
+  { name: "哈基米", symbol: "哈基米", addr: "0x82Ec31D69b3c289E541b50E30681FD1ACAd24444" },
+  { name: "我踏马来了", symbol: "我踏马来了", addr: "0xc51A9250795c0186a6FB4A7D20A90330651e4444" },
+  { name: "Nick Shirley Fund", symbol: "NSF", addr: "0x863AFE6eD8E226deE1b9E4f81bb93DA04C082205" },
+  { name: "WebKey DAO", symbol: "wkeyDAO", addr: "0x194B302a4b0a79795Fb68E2ADf1B8c9eC5ff8d1F" },
+  { name: "BULLA", symbol: "BULLA", addr: "0x595E21b20E78674F8a64C1566A20b2b316Bc3511" },
+  { name: "Bnbjak", symbol: "BNBJAK", addr: "0xacc31a5C47A62ea987719943dcc382A455c94444" },
+  { name: "Giant", symbol: "GTAN", addr: "0xbD7909318b9Ca4ff140B840F69bB310a785d1095" },
+  { name: "ARK", symbol: "ARK", addr: "0xCae117ca6Bc8A341D2E7207F30E180f0e5618B9D" },
+  { name: "CREPE", symbol: "CREPE", addr: "0xeb2B7d5691878627eff20492cA7c9a71228d931D" },
+  { name: "Aster", symbol: "ASTER", addr: "0x000Ae314E2A2172a039B26378814C252734f556A" },
+  { name: "MYX", symbol: "MYX", addr: "0xD82544bf0dfe8385eF8FA34D67e6e4940CC63e16" },
+  { name: "PUP", symbol: "PUP", addr: "0x73b84F7E3901F39FC29F3704a03126D317Ab4444" }
+];
+
+let provider = null;
+let jadeContract = null;
+
+async function initProvider() {
+  for (const url of RPC_URLS) {
+    try {
+      const temp = new ethers.JsonRpcProvider(url);
+      await temp.getBlockNumber();
+      provider = temp;
+      console.log(`[SUCCESS] Connected to RPC: ${url}`);
+      jadeContract = new ethers.Contract(JADE_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
+      break;
+    } catch (e) {
+      console.warn(`[SKIP] ${url}: ${e.message}`);
+    }
+  }
+  if (!provider) console.error("[CRITICAL] No RPC connected");
+}
+
+initProvider();
 
 let pinnedMessageId = null;
 
@@ -75,66 +118,23 @@ https://jade1.io
 });
 
 async function updateLeaderboard() {
-  let freshProjects = null;
-  let usedRPC = "none";
-
-  for (const url of RPC_URLS) {
-    try {
-      console.log(`[RPC TRY] ${url}`);
-      const provider = new ethers.JsonRpcProvider(url);
-      const block = await provider.getBlockNumber();
-      console.log(`[RPC] ${url} - block ${block}`);
-
-      const contract = new ethers.Contract(
-        "0xD987b9869292B77655cde5A4Ab2EBA64C4659D03",
-        ["function getProjects() view returns (string[20], string[20], address[20], uint256[20])"],
-        provider
-      );
-
-      const projects = await contract.getProjects();
-      const [names, symbols, , votesRaw] = projects;
-
-      let total = 0n;
-      for (const v of votesRaw) total += v || 0n;
-      const formattedTotal = Number(ethers.formatUnits(total, 18));
-
-      const firstName = names[0]?.trim() || "";
-
-      console.log(`[DATA from ${url}] Total votes ~${formattedTotal.toFixed(4)} | First name in array: "${firstName}"`);
-
-      // Strict fresh Round 4 check: first name must be "DOYR" (as set in setProjects) + total votes very low (<10 JADE currently)
-      if (firstName === "DOYR" && formattedTotal < 10) {
-        freshProjects = projects;
-        usedRPC = url;
-        console.log(`[FRESH FOUND] Confirmed Round 4 data from ${url}`);
-        break;
-      } else {
-        console.warn(`[STALE] ${url} shows old data (first name "${firstName}", total ${formattedTotal}) - skipping`);
-      }
-    } catch (e) {
-      console.warn(`[FAIL] ${url}: ${e.message}`);
-    }
-  }
-
-  if (!freshProjects) {
-    console.error("[CRITICAL] No fresh Round 4 data found on any RPC - skipping update (retrying in 60s). Check if setProjects tx is confirmed.");
-    // Optional: send alert message to channel if persistent
+  if (!provider || !jadeContract) {
+    console.log("[WARNING] Provider not ready");
     return;
   }
 
-  console.log(`[SUCCESS] Using fresh Round 4 data from ${usedRPC}`);
-
-  const [names, symbols, , votesRaw] = freshProjects;
-
   const entries = [];
   let totalVotes = 0n;
-  for (let i = 0; i < 20; i++) {
-    const name = names[i]?.trim() || "";
-    if (name) {
-      const votesBig = votesRaw[i] || 0n;
-      const votes = Number(ethers.formatUnits(votesBig, 18));
-      totalVotes += votesBig;
-      entries.push({ name, symbol: symbols[i]?.trim() || '???', votes });
+
+  for (const p of PROJECTS) {
+    try {
+      const balBig = await jadeContract.balanceOf(p.addr);
+      const votes = Number(ethers.formatUnits(balBig, 18));
+      totalVotes += balBig;
+      entries.push({ name: p.name, symbol: p.symbol, votes });
+    } catch (e) {
+      console.warn(`[BALANCE FAIL] ${p.name}: ${e.message}`);
+      entries.push({ name: p.name, symbol: p.symbol, votes: 0 });
     }
   }
 
@@ -142,7 +142,7 @@ async function updateLeaderboard() {
 
   let text = `*Jade1 Live Leaderboard* — Round #4\n`;
   text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
-  text += `⚠️ Round 4 is live — votes accumulating now!\nStake JADE & vote: https://jade1.io\n\n`;
+  text += `⚠️ Live votes = real-time JADE balance held by each project\nStake/send JADE to vote: https://jade1.io\n\n`;
 
   entries.forEach((p, i) => {
     text += `${i + 1}. *${p.name} (${p.symbol})* — ${p.votes.toFixed(4)} JADE\n`;
@@ -157,7 +157,7 @@ async function updateLeaderboard() {
     const data = await sendToTelegram(chat, text);
     if (data?.ok) {
       pinnedMessageId = data.result.message_id;
-      console.log(`[NEW] Fresh leaderboard sent - PIN THIS MESSAGE ID: ${pinnedMessageId}`);
+      console.log(`[NEW] Leaderboard sent - PIN THIS ID: ${pinnedMessageId}`);
     }
   } else {
     const edit = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
@@ -167,14 +167,11 @@ async function updateLeaderboard() {
     });
     const editData = await edit.json();
     if (!editData.ok) {
-      console.warn("[EDIT FAILED] - fallback to new message");
+      console.warn("[EDIT FAIL] Sending new");
       const data = await sendToTelegram(chat, text);
-      if (data?.ok) {
-        pinnedMessageId = data.result.message_id;
-        console.log(`[FALLBACK NEW] Sent - PIN THIS ID: ${pinnedMessageId}`);
-      }
+      if (data?.ok) pinnedMessageId = data.result.message_id;
     } else {
-      console.log("[UPDATED] Leaderboard edited");
+      console.log("[UPDATED]");
     }
   }
 }
@@ -182,7 +179,7 @@ async function updateLeaderboard() {
 setInterval(updateLeaderboard, 60000);
 updateLeaderboard();
 
-app.get('/', (req, res) => res.send('Jade Bot - Round #4 Live with Strict Fresh Data Check'));
+app.get('/', (req, res) => res.send('Jade Bot - Round #4 Live Balances (No Contract Lag)'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Running on ${PORT}`));
