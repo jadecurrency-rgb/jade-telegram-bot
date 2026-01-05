@@ -14,7 +14,7 @@ app.use((req, res, next) => {
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_IDS = [process.env.CHANNEL_ID, process.env.GROUP_ID].filter(Boolean);
 
-// Reliable RPCs (prioritized fast ones)
+// Fast RPCs
 const RPC_URLS = [
   "https://bsc-rpc.publicnode.com",
   "https://bsc.publicnode.com",
@@ -25,10 +25,9 @@ const RPC_URLS = [
 
 const ethers = require('ethers');
 
-// JADE token address (from contract constructor)
-const JADE_ADDRESS = "0x330F4fe5ef44B4d0742fE8BED8ca5E29359870DF";
+const JADE_ADDRESS = "0x330F4fe5ef44B4d0742fE8BED8ca5E29359870DF"; // JADE token
 
-// Hardcoded Round 4 projects (exact order from jade1.io + your setProjects)
+// Exact Round 4 projects (from jade1.io real-time)
 const PROJECTS = [
   { name: "DOYR", symbol: "DOYR", addr: "0x925c8Ab7A9a8a148E87CD7f1EC7ECc3625864444" },
   { name: "Happy-Sci", symbol: "HAPPY-SCI", addr: "0x03173FBcC63b5f27A6b3d25e03d426d143647777" },
@@ -55,23 +54,20 @@ const PROJECTS = [
 let provider = null;
 let jadeContract = null;
 
-async function initProvider() {
+async function init() {
   for (const url of RPC_URLS) {
     try {
       const temp = new ethers.JsonRpcProvider(url);
       await temp.getBlockNumber();
       provider = temp;
-      console.log(`[SUCCESS] Connected to RPC: ${url}`);
       jadeContract = new ethers.Contract(JADE_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
+      console.log(`[SUCCESS] RPC: ${url}`);
       break;
-    } catch (e) {
-      console.warn(`[SKIP] ${url}: ${e.message}`);
-    }
+    } catch (e) {}
   }
-  if (!provider) console.error("[CRITICAL] No RPC connected");
 }
 
-initProvider();
+init();
 
 let pinnedMessageId = null;
 
@@ -86,7 +82,7 @@ async function sendToTelegram(chatId, text, parse_mode = "Markdown") {
     console.log(`[TELEGRAM] Sent: ${JSON.stringify(data)}`);
     return data;
   } catch (err) {
-    console.error(`[ERROR] Send failed: ${err.message}`);
+    console.error(`[ERROR] Send: ${err.message}`);
     return null;
   }
 }
@@ -112,29 +108,24 @@ https://jade1.io
     await broadcastVote(message);
     res.json({ success: true });
   } catch (err) {
-    console.error("[ERROR] Webhook:", err.message);
     res.status(500).json({ error: 'failed' });
   }
 });
 
 async function updateLeaderboard() {
-  if (!provider || !jadeContract) {
-    console.log("[WARNING] Provider not ready");
-    return;
-  }
+  if (!provider || !jadeContract) return;
 
   const entries = [];
   let totalVotes = 0n;
 
   for (const p of PROJECTS) {
     try {
-      const balBig = await jadeContract.balanceOf(p.addr);
-      const votes = Number(ethers.formatUnits(balBig, 18));
-      totalVotes += balBig;
-      entries.push({ name: p.name, symbol: p.symbol, votes });
+      const bal = await jadeContract.balanceOf(p.addr);
+      const votes = Number(ethers.formatUnits(bal, 18));
+      totalVotes += bal;
+      entries.push({ ...p, votes });
     } catch (e) {
-      console.warn(`[BALANCE FAIL] ${p.name}: ${e.message}`);
-      entries.push({ name: p.name, symbol: p.symbol, votes: 0 });
+      entries.push({ ...p, votes: 0 });
     }
   }
 
@@ -142,7 +133,7 @@ async function updateLeaderboard() {
 
   let text = `*Jade1 Live Leaderboard* — Round #4\n`;
   text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
-  text += `⚠️ Live votes = real-time JADE balance held by each project\nStake/send JADE to vote: https://jade1.io\n\n`;
+  text += `⚠️ Votes = live JADE balance per project\nSend JADE to vote!\n\n`;
 
   entries.forEach((p, i) => {
     text += `${i + 1}. *${p.name} (${p.symbol})* — ${p.votes.toFixed(4)} JADE\n`;
@@ -155,10 +146,7 @@ async function updateLeaderboard() {
 
   if (!pinnedMessageId) {
     const data = await sendToTelegram(chat, text);
-    if (data?.ok) {
-      pinnedMessageId = data.result.message_id;
-      console.log(`[NEW] Leaderboard sent - PIN THIS ID: ${pinnedMessageId}`);
-    }
+    if (data?.ok) pinnedMessageId = data.result.message_id;
   } else {
     const edit = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
       method: 'POST',
@@ -167,11 +155,8 @@ async function updateLeaderboard() {
     });
     const editData = await edit.json();
     if (!editData.ok) {
-      console.warn("[EDIT FAIL] Sending new");
       const data = await sendToTelegram(chat, text);
       if (data?.ok) pinnedMessageId = data.result.message_id;
-    } else {
-      console.log("[UPDATED]");
     }
   }
 }
@@ -179,7 +164,7 @@ async function updateLeaderboard() {
 setInterval(updateLeaderboard, 60000);
 updateLeaderboard();
 
-app.get('/', (req, res) => res.send('Jade Bot - Round #4 Live Balances (No Contract Lag)'));
+app.get('/', (req, res) => res.send('Jade Bot - Round #4 Balance-Based Live'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => console.log(`Running on ${PORT}`));
