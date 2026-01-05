@@ -17,7 +17,7 @@ const CHAT_IDS = [
   process.env.GROUP_ID
 ].filter(Boolean);
 
-// Reliable BSC RPCs (fast syncing ones first)
+// Fast RPCs
 const RPC_URLS = [
   "https://bsc-rpc.publicnode.com",
   "https://bsc.publicnode.com",
@@ -28,10 +28,9 @@ const RPC_URLS = [
 
 const ethers = require('ethers');
 
-// JADE token contract address
 const JADE_ADDRESS = "0x330F4fe5ef44B4d0742fE8BED8ca5E29359870DF";
 
-// Current Round 4 projects (exact from jade1.io, Jan 2026)
+// Round 4 projects (hardcoded, exact from jade1.io)
 const PROJECTS = [
   { name: "DOYR", symbol: "DOYR", addr: "0x925c8Ab7A9a8a148E87CD7f1EC7ECc3625864444" },
   { name: "Happy-Sci", symbol: "HAPPY-SCI", addr: "0x03173FBcC63b5f27A6b3d25e03d426d143647777" },
@@ -61,172 +60,108 @@ let jadeContract = null;
 async function initProvider() {
   for (const url of RPC_URLS) {
     try {
-      const tempProvider = new ethers.JsonRpcProvider(url);
-      await tempProvider.getBlockNumber();
-      provider = tempProvider;
-      jadeContract = new ethers.Contract(
-        JADE_ADDRESS,
-        ["function balanceOf(address) view returns (uint256)"],
-        provider
-      );
-      console.log(`[SUCCESS] Connected to RPC: ${url}`);
+      const temp = new ethers.JsonRpcProvider(url);
+      await temp.getBlockNumber();
+      provider = temp;
+      jadeContract = new ethers.Contract(JADE_ADDRESS, ["function balanceOf(address) view returns (uint256)"], provider);
+      console.log(`[SUCCESS] RPC connected: ${url}`);
       break;
     } catch (e) {
-      console.warn(`[SKIP] RPC ${url}: ${e.message}`);
+      console.warn(`[SKIP] ${url}`);
     }
   }
-
-  if (!provider) {
-    console.error("[CRITICAL] No working RPC found. Bot cannot fetch balances.");
-  }
+  if (!provider) console.error("[ERROR] No RPC available");
 }
 
 initProvider();
 
 let pinnedMessageId = null;
 
-async function sendToTelegram(chatId, text, parse_mode = "Markdown") {
+async function sendToTelegram(chatId, text) {
   try {
-    const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode,
-        disable_web_page_preview: true
-      })
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown', disable_web_page_preview: true })
     });
-    const data = await response.json();
-    console.log(`[TELEGRAM] Send response: ${JSON.stringify(data)}`);
+    const data = await res.json();
+    console.log(`[TELEGRAM] Sent: ${JSON.stringify(data)}`);
     return data;
   } catch (err) {
-    console.error(`[ERROR] Telegram send failed: ${err.message}`);
+    console.error(`[ERROR] Send failed: ${err.message}`);
     return null;
-  }
-}
-
-async function broadcastVote(message) {
-  for (const chatId of CHAT_IDS) {
-    if (chatId) await sendToTelegram(chatId, message);
   }
 }
 
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
-    console.log("[INFO] VOTE RECEIVED:", { wallet, amount, projectName, projectSymbol });
-
     const shortWallet = wallet.slice(0,6) + '...' + wallet.slice(-4);
-    const message = `
-🗳 *New Vote Detected!*
-
-Wallet: \`${shortWallet}\`
-Power: *${parseFloat(amount).toFixed(4)} JADE*
-Project: *${projectName} (${projectSymbol})*
-Round: #4
-
-https://jade1.io
-    `.trim();
-
-    await broadcastVote(message);
+    const message = `🗳 *New Vote Detected!*\n\nWallet: \`${shortWallet}\`\nPower: *${parseFloat(amount).toFixed(4)} JADE*\nProject: *${projectName} (${projectSymbol})*\nRound: #4\n\nhttps://jade1.io`.trim();
+    for (const chatId of CHAT_IDS) if (chatId) await sendToTelegram(chatId, message);
     res.json({ success: true });
   } catch (err) {
-    console.error("[ERROR] Webhook failed:", err.message);
     res.status(500).json({ error: 'failed' });
   }
 });
 
 async function updateLeaderboard() {
-  if (!jadeContract) {
-    console.log("[WARNING] JADE contract not initialized");
-    return;
-  }
+  if (!jadeContract) return console.log("[WARN] No JADE contract");
 
   try {
-    console.log("[DEBUG] Updating Round #4 leaderboard...");
+    console.log("[DEBUG] Fetching live JADE balances for Round 4...");
 
     const entries = [];
-    let totalVotes = 0n;
+    let total = 0n;
 
     for (const p of PROJECTS) {
-      try {
-        const balance = await jadeContract.balanceOf(p.addr);
-        const votes = Number(ethers.formatUnits(balance, 18));
-        totalVotes += balance;
-
-        entries.push({
-          name: p.name,
-          symbol: p.symbol,
-          votes
-        });
-      } catch (err) {
-        console.warn(`[WARN] Failed to get balance for ${p.name}: ${err.message}`);
-        entries.push({ name: p.name, symbol: p.symbol, votes: 0 });
-      }
+      const bal = await jadeContract.balanceOf(p.addr).catch(() => 0n);
+      const votes = Number(ethers.formatUnits(bal, 18));
+      total += bal;
+      entries.push({ ...p, votes });
     }
 
-    // Sort by votes descending
     entries.sort((a, b) => b.votes - a.votes);
 
     let text = `*Jade1 Live Leaderboard* — Round #4\n`;
-    text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
-    text += `⚠️ Votes = real-time JADE balance of project addresses\nSend JADE to vote!\n\n`;
+    text += `Total Votes: *${Number(ethers.formatUnits(total, 18)).toFixed(0)} JADE*\n\n`;
+    text += `Votes = real-time JADE balance held by project\nSend JADE to vote!\n\n`;
 
-    entries.forEach((p, i) => {
-      text += `${i + 1}. *${p.name} (${p.symbol})* — ${p.votes.toFixed(4)} JADE\n`;
-    });
+    entries.forEach((p, i) => text += `${i+1}. *${p.name} (${p.symbol})* — ${p.votes.toFixed(4)} JADE\n`);
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
-    const leaderboardChat = process.env.CHANNEL_ID;
-    if (!leaderboardChat) {
-      console.log("[WARNING] CHANNEL_ID not set");
-      return;
-    }
+    const chat = process.env.CHANNEL_ID;
+    if (!chat) return;
 
     if (!pinnedMessageId) {
-      const data = await sendToTelegram(leaderboardChat, text);
+      const data = await sendToTelegram(chat, text);
       if (data?.ok) {
         pinnedMessageId = data.result.message_id;
-        console.log(`[INFO] New leaderboard sent — ID: ${pinnedMessageId} (pin manually)`);
+        console.log(`[NEW] Leaderboard ID: ${pinnedMessageId} - PIN THIS`);
       }
     } else {
-      const editResponse = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
+      const editRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: leaderboardChat,
-          message_id: pinnedMessageId,
-          text,
-          parse_mode: 'Markdown'
-        })
+        body: JSON.stringify({ chat_id: chat, message_id: pinnedMessageId, text, parse_mode: 'Markdown' })
       });
-      const editData = await editResponse.json();
-
+      const editData = await editRes.json();
       if (!editData.ok) {
-        console.warn("[WARN] Edit failed, sending new message:", editData.description);
-        const data = await sendToTelegram(leaderboardChat, text);
-        if (data?.ok) {
-          pinnedMessageId = data.result.message_id;
-          console.log(`[INFO] Fallback new message sent — ID: ${pinnedMessageId}`);
-        }
-      } else {
-        console.log("[SUCCESS] Leaderboard updated");
+        console.log("[EDIT FAIL] Sending new");
+        const data = await sendToTelegram(chat, text);
+        if (data?.ok) pinnedMessageId = data.result.message_id;
       }
     }
   } catch (err) {
-    console.error("[ERROR] Leaderboard update failed:", err.message);
+    console.error("[ERROR] Update failed:", err.message);
   }
 }
 
-// Run immediately and every 60 seconds
 setInterval(updateLeaderboard, 60000);
 updateLeaderboard();
 
-app.get('/', (req, res) => res.send('Jade Bot - Round #4 Live Balances Running'));
+app.get('/', (req, res) => res.send('Jade Bot Round #4 Live'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`Server on ${PORT}`));
