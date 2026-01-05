@@ -62,7 +62,7 @@ try {
   console.error("[CRITICAL] Initialization failed:", err.message);
 }
 
-let pinnedMessageId = null; // Resets on restart → fallback will send new message
+let pinnedMessageId = null; // Resets on restart → fallback sends new
 
 async function sendToTelegram(chatId, text, parse_mode = "Markdown") {
   try {
@@ -93,8 +93,8 @@ async function broadcastVote(message) {
 
 app.post('/vote-webhook', async (req, res) => {
   try {
-    const { wallet, amount, projectName, projectSymbol, round } = req.body;
-    console.log("[INFO] VOTE RECEIVED →", { wallet, amount, projectName, projectSymbol, round });
+    const { wallet, amount, projectName, projectSymbol } = req.body;
+    console.log("[INFO] VOTE RECEIVED →", { wallet, amount, projectName, projectSymbol });
 
     const shortWallet = wallet.slice(0,6) + '...' + wallet.slice(-4);
     const message = `
@@ -103,7 +103,7 @@ app.post('/vote-webhook', async (req, res) => {
 Wallet: \`${shortWallet}\`
 Power: *${parseFloat(amount).toFixed(4)} JADE*
 Project: *${projectName} (${projectSymbol})*
-Round: #${round || '4'}
+Round: #4
 
 https://jade1.io
     `.trim();
@@ -125,9 +125,8 @@ async function updateLeaderboard() {
   try {
     console.log("[DEBUG] Starting leaderboard update");
 
-    // Log actual contract round for debugging (but we hardcode display to 4)
     const contractRound = await votingContract.currentRound();
-    console.log(`[INFO] Actual round in contract: ${contractRound}`);
+    console.log(`[INFO] Actual contract round: ${contractRound}`);
 
     const projects = await votingContract.getProjects();
     const [names, symbols, addresses, votesRaw] = projects;
@@ -152,7 +151,7 @@ async function updateLeaderboard() {
 
     entries.sort((a, b) => b.votes - a.votes);
 
-    // Hardcoded to display Round #4 (as requested)
+    // Forced to Round #4 everywhere
     let text = `*Jade1 Live Leaderboard* — Round #4\n`;
     text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
 
@@ -173,14 +172,12 @@ async function updateLeaderboard() {
     }
 
     if (!pinnedMessageId) {
-      // First send
       const data = await sendToTelegram(leaderboardChat, text);
       if (data?.ok) {
         pinnedMessageId = data.result.message_id;
-        console.log(`[INFO] New leaderboard sent — ID: ${pinnedMessageId} (pin manually or give bot pin rights)`);
+        console.log(`[INFO] New leaderboard sent — ID: ${pinnedMessageId} (pin this one manually)`);
       }
     } else {
-      // Try edit
       const editResponse = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -195,12 +192,11 @@ async function updateLeaderboard() {
 
       if (!editData.ok) {
         console.error("[ERROR] Edit failed:", editData.description);
-
-        // Fallback: send new message if old one is gone (common after restart)
+        // Fallback send new
         const data = await sendToTelegram(leaderboardChat, text);
         if (data?.ok) {
           pinnedMessageId = data.result.message_id;
-          console.log(`[INFO] Fallback: new message sent — ID: ${pinnedMessageId}`);
+          console.log(`[INFO] Fallback new message sent — ID: ${pinnedMessageId}`);
         }
       } else {
         console.log("[SUCCESS] Leaderboard updated");
@@ -208,13 +204,11 @@ async function updateLeaderboard() {
     }
   } catch (err) {
     console.error("[ERROR] Leaderboard update failed:", err.message);
-    console.error(err);
   }
 }
 
-// Update every 60 seconds
 setInterval(updateLeaderboard, 60000);
-updateLeaderboard(); // Run immediately
+updateLeaderboard();
 
 app.get('/', (req, res) => res.send('Jade Bot + Live Leaderboard Running'));
 
