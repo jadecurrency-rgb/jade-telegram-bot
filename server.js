@@ -14,7 +14,7 @@ app.use((req, res, next) => {
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_IDS = [process.env.CHANNEL_ID, process.env.GROUP_ID].filter(Boolean);
 
-// Fastest syncing free BSC RPCs (Jan 2026 - publicnode variants sync newest blocks quickest)
+// Most reliable/fast-syncing free BSC RPCs in early 2026 (publicnode & ankr sync newest state quickest)
 const RPC_URLS = [
   "https://bsc-rpc.publicnode.com",
   "https://bsc.publicnode.com",
@@ -23,7 +23,9 @@ const RPC_URLS = [
   "https://bsc-dataseed.binance.org/",
   "https://bsc-dataseed1.defibit.io",
   "https://bsc-dataseed1.ninicoin.io",
-  "https://bsc-dataseed2.binance.org/"
+  "https://bsc-dataseed2.binance.org/",
+  "https://bsc-dataseed3.binance.org/",
+  "https://bsc-dataseed4.binance.org/"
 ];
 
 const ethers = require('ethers');
@@ -78,10 +80,10 @@ async function updateLeaderboard() {
 
   for (const url of RPC_URLS) {
     try {
-      console.log(`[RPC TRY] Testing ${url} for fresh Round 4 data`);
+      console.log(`[RPC TRY] ${url}`);
       const provider = new ethers.JsonRpcProvider(url);
       const block = await provider.getBlockNumber();
-      console.log(`[RPC] ${url} - latest block ${block}`);
+      console.log(`[RPC] ${url} - block ${block}`);
 
       const contract = new ethers.Contract(
         "0xD987b9869292B77655cde5A4Ab2EBA64C4659D03",
@@ -90,24 +92,24 @@ async function updateLeaderboard() {
       );
 
       const projects = await contract.getProjects();
-      const [names, , , votesRaw] = projects;
+      const [names, symbols, , votesRaw] = projects;
 
       let total = 0n;
       for (const v of votesRaw) total += v || 0n;
       const formattedTotal = Number(ethers.formatUnits(total, 18));
 
-      const topName = names[0]?.trim() || "";
+      const firstName = names[0]?.trim() || "";
 
-      console.log(`[DATA from ${url}] Total votes: ${formattedTotal.toFixed(4)} | Top project: "${topName}"`);
+      console.log(`[DATA from ${url}] Total votes ~${formattedTotal.toFixed(4)} | First name in array: "${firstName}"`);
 
-      // Strict check for fresh Round 4: top project must be DOYR + very low total votes
-      if (topName === "DOYR" && formattedTotal < 10) {
+      // Strict fresh Round 4 check: first name must be "DOYR" (as set in setProjects) + total votes very low (<10 JADE currently)
+      if (firstName === "DOYR" && formattedTotal < 10) {
         freshProjects = projects;
         usedRPC = url;
-        console.log(`[FRESH FOUND] Using ${url} - confirmed Round 4 data`);
+        console.log(`[FRESH FOUND] Confirmed Round 4 data from ${url}`);
         break;
       } else {
-        console.warn(`[STALE/WRONG] ${url} has old data (top: "${topName}", votes: ${formattedTotal}) - skipping`);
+        console.warn(`[STALE] ${url} shows old data (first name "${firstName}", total ${formattedTotal}) - skipping`);
       }
     } catch (e) {
       console.warn(`[FAIL] ${url}: ${e.message}`);
@@ -115,11 +117,12 @@ async function updateLeaderboard() {
   }
 
   if (!freshProjects) {
-    console.error("[CRITICAL] No RPC returned fresh Round 4 data - skipping update this cycle (will retry in 60s)");
+    console.error("[CRITICAL] No fresh Round 4 data found on any RPC - skipping update (retrying in 60s). Check if setProjects tx is confirmed.");
+    // Optional: send alert message to channel if persistent
     return;
   }
 
-  console.log(`[SUCCESS] Building leaderboard from fresh RPC: ${usedRPC}`);
+  console.log(`[SUCCESS] Using fresh Round 4 data from ${usedRPC}`);
 
   const [names, symbols, , votesRaw] = freshProjects;
 
@@ -139,7 +142,7 @@ async function updateLeaderboard() {
 
   let text = `*Jade1 Live Leaderboard* — Round #4\n`;
   text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
-  text += `⚠️ Round 4 is live — votes are accumulating!\nStake JADE & vote: https://jade1.io\n\n`;
+  text += `⚠️ Round 4 is live — votes accumulating now!\nStake JADE & vote: https://jade1.io\n\n`;
 
   entries.forEach((p, i) => {
     text += `${i + 1}. *${p.name} (${p.symbol})* — ${p.votes.toFixed(4)} JADE\n`;
@@ -150,12 +153,11 @@ async function updateLeaderboard() {
   const chat = process.env.CHANNEL_ID;
   if (!chat) return;
 
-  // Always try edit first, fallback to new (resilient to restarts/old pins)
   if (!pinnedMessageId) {
     const data = await sendToTelegram(chat, text);
     if (data?.ok) {
       pinnedMessageId = data.result.message_id;
-      console.log(`[NEW MESSAGE] Leaderboard sent - PIN THIS ID: ${pinnedMessageId}`);
+      console.log(`[NEW] Fresh leaderboard sent - PIN THIS MESSAGE ID: ${pinnedMessageId}`);
     }
   } else {
     const edit = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
@@ -165,14 +167,14 @@ async function updateLeaderboard() {
     });
     const editData = await edit.json();
     if (!editData.ok) {
-      console.warn("[EDIT FAILED] Sending new message as fallback");
+      console.warn("[EDIT FAILED] - fallback to new message");
       const data = await sendToTelegram(chat, text);
       if (data?.ok) {
         pinnedMessageId = data.result.message_id;
         console.log(`[FALLBACK NEW] Sent - PIN THIS ID: ${pinnedMessageId}`);
       }
     } else {
-      console.log("[UPDATED] Existing message edited");
+      console.log("[UPDATED] Leaderboard edited");
     }
   }
 }
@@ -180,7 +182,7 @@ async function updateLeaderboard() {
 setInterval(updateLeaderboard, 60000);
 updateLeaderboard();
 
-app.get('/', (req, res) => res.send('Jade Bot - Round #4 Final Anti-Lag Version'));
+app.get('/', (req, res) => res.send('Jade Bot - Round #4 Live with Strict Fresh Data Check'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => console.log(`Running on port ${PORT}`));
