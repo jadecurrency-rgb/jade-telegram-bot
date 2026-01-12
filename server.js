@@ -14,18 +14,19 @@ app.use((req, res, next) => {
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 
-const RPC_URLS = [
-  "https://bsc-rpc.publicnode.com",
-  "https://bsc.publicnode.com",
-  "https://rpc.ankr.com/bsc",
-  "https://bscrpc.com",
-  "https://bsc-dataseed.binance.org/"
-];
-
 const ethers = require('ethers');
 
-let provider = null;
-let contract = null;
+// Reliable BSC RPCs - prioritized faster/official ones first
+const RPC_URLS = [
+  "https://bsc-dataseed.binance.org/",       // Official - usually fastest
+  "https://bsc-dataseed1.defibit.io/",
+  "https://bsc-dataseed1.ninicoin.io/",
+  "https://bsc-dataseed2.binance.org/",
+  "https://rpc.ankr.com/bsc",
+  "https://bsc-rpc.publicnode.com",
+  "https://bscrpc.com",
+  "https://bsc.publicnode.com"
+];
 
 const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a";
 
@@ -34,45 +35,63 @@ const ABI = [
   "function currentRound() view returns (uint256)"
 ];
 
-let currentRound = 5; // fallback
+let provider = null;
+let contract = null;
+let currentRound = 5; // fallback if cannot read
 
-async function initProvider() {
+async function selectBestProvider() {
+  let best = { url: null, round: 0n, provider: null, contract: null };
+
   for (const url of RPC_URLS) {
     try {
       const tempProvider = new ethers.JsonRpcProvider(url);
+      // Quick connectivity check
       await tempProvider.getBlockNumber();
-      provider = tempProvider;
-      contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
-      console.log(`[SUCCESS] Connected to RPC: ${url}`);
-      return true;
+
+      const tempContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, tempProvider);
+
+      // Fetch currentRound - this is the key to detect latest state
+      const roundBig = await tempContract.currentRound();
+      const roundNum = Number(roundBig);
+
+      console.log(`[RPC CHECK] ${url} → currentRound: #${roundNum}`);
+
+      if (roundNum > best.round) {
+        best = { url, round: roundNum, provider: tempProvider, contract: tempContract };
+      }
     } catch (e) {
-      console.warn(`[SKIP] ${url}: ${e.message}`);
+      console.warn(`[RPC SKIP] ${url}: ${e.message}`);
     }
   }
-  console.error("[CRITICAL] No working RPC found");
-  return false;
-}
 
-await initProvider();
+  if (best.provider) {
+    provider = best.provider;
+    contract = best.contract;
+    currentRound = Number(best.round);
+    console.log(`[SUCCESS] Selected best RPC: ${best.url} with Round #${currentRound}`);
+  } else {
+    console.error("[CRITICAL] No working RPC found - using fallback");
+    // Fallback to first RPC
+    provider = new ethers.JsonRpcProvider(RPC_URLS[0]);
+    contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
+  }
 
-// Try to read currentRound once
-async function fetchCurrentRound() {
-  if (contract) {
-    try {
-      const roundBn = await contract.currentRound();
-      currentRound = Number(roundBn);
-      console.log(`[INFO] Detected current round from chain: #${currentRound}`);
-    } catch (e) {
-      console.warn("[WARN] Could not read currentRound() yet:", e.message);
-    }
+  // Final fallback attempt to read round
+  try {
+    const roundBig = await contract.currentRound();
+    currentRound = Number(roundBig);
+    console.log(`[FINAL] Current round confirmed: #${currentRound}`);
+  } catch (e) {
+    console.warn("[WARN] Could not confirm currentRound - using fallback #5");
   }
 }
-fetchCurrentRound();
 
-let pinnedMessageId = null; // Force reset - no old pin
+// Run provider selection on startup
+selectBestProvider();
+
+let pinnedMessageId = null; // Will force new message below
 
 async function sendMessage(text) {
-  // same as before...
   try {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -94,7 +113,6 @@ async function sendMessage(text) {
 }
 
 async function editMessage(messageId, text) {
-  // same as before...
   try {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
       method: 'POST',
@@ -115,31 +133,22 @@ async function editMessage(messageId, text) {
   }
 }
 
-async function fetchProjectsWithRetry(maxRetries = 3) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`[ATTEMPT ${attempt}] Fetching projects...`);
-      const [names, symbols, , votesRaw] = await contract.getProjects();
-      console.log("[DEBUG] Raw names:", names.map(n => n.trim()).filter(Boolean));
-      console.log("[DEBUG] Raw symbols:", symbols.map(s => s.trim()).filter(Boolean));
-      console.log("[DEBUG] Raw votes (first few):", votesRaw.slice(0,5).map(v => Number(ethers.formatUnits(v, 18))));
-      return { names, symbols, votesRaw };
-    } catch (err) {
-      console.error(`[ERROR attempt ${attempt}] getProjects failed:`, err.message);
-      if (attempt < maxRetries) await new Promise(r => setTimeout(r, 10000)); // 10s wait
-    }
-  }
-  throw new Error("Failed to fetch projects after retries");
-}
-
 async function updateLeaderboard() {
   if (!contract) {
-    console.log("[WARN] Contract not initialized");
+    console.log("[WARN] Contract not ready");
     return;
   }
 
+  // Re-select best provider every hour (in case of RPC lag resolution)
+  // Remove or adjust if not needed
+  // if (Date.now() % (60*60*1000) < 60000) await selectBestProvider();
+
   try {
-    const { names, symbols, votesRaw } = await fetchProjectsWithRetry();
+    console.log("[UPDATE] Fetching latest leaderboard...");
+
+    const [names, symbols, , votesRaw] = await contract.getProjects();
+
+    console.log("[DEBUG] Raw project names:", names.map(n => n?.trim()).filter(Boolean));
 
     const entries = [];
     let totalVotes = 0n;
@@ -150,11 +159,7 @@ async function updateLeaderboard() {
         const votesBig = votesRaw[i] || 0n;
         const votes = Number(ethers.formatUnits(votesBig, 18));
         totalVotes += votesBig;
-        entries.push({
-          name,
-          symbol: symbols[i]?.trim() || '???',
-          votes
-        });
+        entries.push({ name, symbol: symbols[i]?.trim() || '???', votes });
       }
     }
 
@@ -173,22 +178,35 @@ async function updateLeaderboard() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
-    // Always send NEW on startup/first update; then edit
-    let data = await sendMessage(text);
+    // Force new message on first few runs or if no pin (to override any old pinned)
+    const data = await sendMessage(text);
     if (data.ok) {
       pinnedMessageId = data.result.message_id;
-      console.log(`[NEW PIN] Leaderboard sent - new PIN ID: ${pinnedMessageId}`);
+      console.log(`[NEW/REFRESH] Leaderboard sent - PIN ID: ${pinnedMessageId}`);
     }
+
+    // After first send, switch to edit mode for subsequent updates
+    // Comment the above force-send and uncomment below if you want normal edit after first
+    /*
+    if (!pinnedMessageId) {
+      const data = await sendMessage(text);
+      if (data.ok) pinnedMessageId = data.result.message_id;
+    } else {
+      const edited = await editMessage(pinnedMessageId, text);
+      if (!edited) {
+        const data = await sendMessage(text);
+        if (data.ok) pinnedMessageId = data.result.message_id;
+      }
+    }
+    */
   } catch (err) {
-    console.error("[ERROR] Leaderboard failed:", err.message);
+    console.error("[ERROR] Fetch failed:", err.message);
   }
 }
 
-// Update every minute
-setInterval(updateLeaderboard, 60000);
+setInterval(updateLeaderboard, 60_000);
 updateLeaderboard(); // immediate
 
-// Webhook (updated to use currentRound)
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
