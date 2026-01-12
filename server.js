@@ -31,7 +31,7 @@ const RPC_URLS = [
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // Your new Round 5 contract (fresh reset)
+const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // NEW Round 5 contract (reset complete)
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])"
@@ -58,7 +58,7 @@ async function initProvider() {
 
 initProvider();
 
-const ROUND_NUMBER = 5; // Hardcoded to Round 5 — fresh start
+const ROUND_NUMBER = 5; // Hardcoded Round 5
 
 async function sendMessage(text) {
   try {
@@ -93,7 +93,7 @@ async function pinMessage(messageId) {
       })
     });
     const data = await res.json();
-    console.log(`[PIN] ${data.ok ? 'Success (old pin automatically replaced)' : 'Failed'}`);
+    console.log(`[PIN] ${data.ok ? 'Success (old pin replaced)' : 'Failed'}`);
     return data.ok;
   } catch (err) {
     console.error("[ERROR] Pin failed:", err.message);
@@ -108,11 +108,11 @@ async function updateLeaderboard() {
   }
 
   try {
-    console.log("[UPDATE] Fetching fresh Round 5 data from new contract...");
+    console.log("[UPDATE] Fetching fresh Round 5 data...");
 
     const [names, symbols, , votesRaw] = await contract.getProjects();
 
-    console.log("[DEBUG] Current projects:", names.map(n => n?.trim()).filter(Boolean)); // Check Railway logs for new projects (e.g., 草根文化)
+    console.log("[DEBUG] Projects:", names.map(n => n?.trim()).filter(Boolean)); // Check logs for confirmation
 
     const entries = [];
     let totalVotes = 0n;
@@ -134,7 +134,7 @@ async function updateLeaderboard() {
 
     entries.sort((a, b) => b.votes - a.votes);
 
-    let text = `*Jade1 Live Leaderboard* — Round #${ROUND_NUMBER} (FRESH RESET)\n`;
+    let text = `*Jade1 Live Leaderboard* — Round #${ROUND_NUMBER}\n`;
     text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
 
     if (entries.length === 0 || totalVotes === 0n) {
@@ -147,22 +147,20 @@ async function updateLeaderboard() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
-    // ALWAYS send a NEW message and pin it — this replaces ANY old pinned message (including Round 4)
     const data = await sendMessage(text);
     if (data.ok) {
-      await pinMessage(data.result.message_id);
-      console.log(`[SUCCESS] New Round #5 leaderboard sent & pinned — old data overridden`);
+      await pinMessage(data.result.message_id); // Pins new, auto-replaces old
+      console.log(`[SUCCESS] Fresh Round 5 leaderboard sent & pinned`);
     }
   } catch (err) {
     console.error("[ERROR] Update failed:", err.message);
   }
 }
 
-// Update every minute
 setInterval(updateLeaderboard, 60_000);
-updateLeaderboard(); // Immediate start
+updateLeaderboard();
 
-// Webhook (Round #5)
+// Webhook
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
@@ -174,7 +172,7 @@ app.post('/vote-webhook', async (req, res) => {
 Wallet: \`${short}\`
 Power: *${parseFloat(amount).toFixed(4)} JADE*
 Project: *${projectName} (${projectSymbol})*
-Round: #${ROUND_NUMBER} (FRESH)
+Round: #${ROUND_NUMBER}
 
 https://jade1.io`.trim();
 
@@ -186,9 +184,7 @@ https://jade1.io`.trim();
   }
 });
 
-app.get('/', (req, res) => res.send('Jade Bot — NEW Round #5 Fresh Reset Active'));
+app.get('/', (req, res) => res.send(`Jade Bot — Round #${ROUND_NUMBER} Active`));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Bot running on port ${PORT}`);
-});
+app.listen(PORT, '0.0.0.0', () => console.log(`Bot running on port ${PORT}`));
