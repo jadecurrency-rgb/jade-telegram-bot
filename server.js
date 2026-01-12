@@ -16,7 +16,7 @@ const CHANNEL_ID = process.env.CHANNEL_ID;
 
 const ethers = require('ethers');
 
-// Reliable BSC RPCs - official/fast first
+// Reliable BSC RPCs
 const RPC_URLS = [
   "https://bsc-dataseed.binance.org/",
   "https://bsc-dataseed1.defibit.io/",
@@ -31,7 +31,7 @@ const RPC_URLS = [
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // NEW Round 5 contract (confirmed with recent Set Projects tx)
+const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // ← Change to your actual new Round 5 contract if different (the one with 0 votes)
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])"
@@ -58,7 +58,7 @@ async function initProvider() {
 
 initProvider();
 
-const ROUND_NUMBER = 5; // Manual - change next week to 6, etc.
+const ROUND_NUMBER = 5; // Current round - change weekly
 
 async function sendMessage(text) {
   try {
@@ -93,10 +93,10 @@ async function pinMessage(messageId) {
       })
     });
     const data = await res.json();
-    console.log(`[PIN] ${data.ok ? 'Success' : 'Failed'}: ${data.description || ''}`);
+    console.log(`[PIN] ${data.ok ? 'Success (old pin replaced)' : 'Failed'}: ${data.description || ''}`);
     return data.ok;
   } catch (err) {
-    console.error("[ERROR] Pin failed:", err.message);
+    console.error("[ERROR] Pin failed (check bot admin rights):", err.message);
     return false;
   }
 }
@@ -108,25 +108,11 @@ async function updateLeaderboard() {
   }
 
   try {
-    console.log("[UPDATE] Fetching fresh data from Round 5 contract...");
+    console.log("[UPDATE] Fetching latest Round 5 data...");
 
-    // Retry fetch up to 5 times (10s delay) to handle any RPC lag
-    let names, symbols, votesRaw;
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      try {
-        const [n, s, , v] = await contract.getProjects();
-        names = n;
-        symbols = s;
-        votesRaw = v;
-        break;
-      } catch (e) {
-        console.warn(`[RETRY ${attempt}/5] getProjects failed: ${e.message}`);
-        await new Promise(r => setTimeout(r, 10000)); // 10s wait
-      }
-    }
-    if (!names) throw new Error("Failed to fetch after retries");
+    const [names, symbols, , votesRaw] = await contract.getProjects();
 
-    console.log("[DEBUG] Fetched project names:", names.map(n => n?.trim()).filter(Boolean)); // Check Railway logs here!
+    console.log("[DEBUG] Fetched project names:", names.map(n => n?.trim()).filter(Boolean)); // ← Check Railway logs for new projects!
 
     const entries = [];
     let totalVotes = 0n;
@@ -161,20 +147,18 @@ async function updateLeaderboard() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
-    // ALWAYS send NEW message + pin it (replaces old pinned automatically)
     const data = await sendMessage(text);
     if (data.ok) {
       await pinMessage(data.result.message_id);
-      console.log(`[SUCCESS] Sent & pinned fresh Round #${ROUND_NUMBER} leaderboard`);
+      console.log(`[SUCCESS] New Round #5 leaderboard sent & pinned (old replaced)`);
     }
   } catch (err) {
-    console.error("[ERROR] Update failed:", err.message);
+    console.error("[ERROR] Failed:", err.message);
   }
 }
 
-// Update every minute
 setInterval(updateLeaderboard, 60_000);
-updateLeaderboard(); // Immediate run
+updateLeaderboard();
 
 // Webhook
 app.post('/vote-webhook', async (req, res) => {
