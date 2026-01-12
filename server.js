@@ -138,7 +138,7 @@ async function updateLeaderboard() {
     text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
 
     if (entries.length === 0 || totalVotes === 0n) {
-      text += `⚠️ Round ${ROUND_NUMBER} just started — votes are accumulating!\nStake JADE & vote on https://jade1.io\n\n`;
+      text += `⚠️ Round ${ROUND_NUMBER} just started — votes are accumulating!\nHold JADE & vote on https://jade1.io\n\n`;
     }
 
     entries.forEach((p, i) => {
