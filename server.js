@@ -12,9 +12,8 @@ app.use((req, res, next) => {
 });
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID; // e.g. -1001234567890
+const CHANNEL_ID = process.env.CHANNEL_ID;
 
-// Reliable BSC RPCs
 const RPC_URLS = [
   "https://bsc-rpc.publicnode.com",
   "https://bsc.publicnode.com",
@@ -28,14 +27,14 @@ const ethers = require('ethers');
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // New voting contract for Round 5
+const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a";
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])",
   "function currentRound() view returns (uint256)"
 ];
 
-let isFirstRun = true; // Flag to force new message on startup
+let currentRound = 5; // fallback
 
 async function initProvider() {
   for (const url of RPC_URLS) {
@@ -45,22 +44,35 @@ async function initProvider() {
       provider = tempProvider;
       contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
       console.log(`[SUCCESS] Connected to RPC: ${url}`);
-      break;
+      return true;
     } catch (e) {
       console.warn(`[SKIP] ${url}: ${e.message}`);
     }
   }
-
-  if (!provider) {
-    console.error("[CRITICAL] No working RPC found");
-  }
+  console.error("[CRITICAL] No working RPC found");
+  return false;
 }
 
-initProvider();
+await initProvider();
 
-let pinnedMessageId = null;
+// Try to read currentRound once
+async function fetchCurrentRound() {
+  if (contract) {
+    try {
+      const roundBn = await contract.currentRound();
+      currentRound = Number(roundBn);
+      console.log(`[INFO] Detected current round from chain: #${currentRound}`);
+    } catch (e) {
+      console.warn("[WARN] Could not read currentRound() yet:", e.message);
+    }
+  }
+}
+fetchCurrentRound();
+
+let pinnedMessageId = null; // Force reset - no old pin
 
 async function sendMessage(text) {
+  // same as before...
   try {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -82,6 +94,7 @@ async function sendMessage(text) {
 }
 
 async function editMessage(messageId, text) {
+  // same as before...
   try {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
       method: 'POST',
@@ -102,6 +115,23 @@ async function editMessage(messageId, text) {
   }
 }
 
+async function fetchProjectsWithRetry(maxRetries = 3) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`[ATTEMPT ${attempt}] Fetching projects...`);
+      const [names, symbols, , votesRaw] = await contract.getProjects();
+      console.log("[DEBUG] Raw names:", names.map(n => n.trim()).filter(Boolean));
+      console.log("[DEBUG] Raw symbols:", symbols.map(s => s.trim()).filter(Boolean));
+      console.log("[DEBUG] Raw votes (first few):", votesRaw.slice(0,5).map(v => Number(ethers.formatUnits(v, 18))));
+      return { names, symbols, votesRaw };
+    } catch (err) {
+      console.error(`[ERROR attempt ${attempt}] getProjects failed:`, err.message);
+      if (attempt < maxRetries) await new Promise(r => setTimeout(r, 10000)); // 10s wait
+    }
+  }
+  throw new Error("Failed to fetch projects after retries");
+}
+
 async function updateLeaderboard() {
   if (!contract) {
     console.log("[WARN] Contract not initialized");
@@ -109,29 +139,17 @@ async function updateLeaderboard() {
   }
 
   try {
-    console.log("[UPDATE] Fetching leaderboard from new contract...");
-
-    // Small delay on first fetch to let chain propagate new projects
-    if (isFirstRun) {
-      console.log("[INFO] First run - waiting 5s for contract data to settle...");
-      await new Promise(r => setTimeout(r, 5000));
-    }
-
-    const [names, symbols, , votesRaw] = await contract.getProjects();
-
-    // Log raw data for debug (see what projects are coming)
-    console.log("[DEBUG] Raw projects from chain:", names.map(n => n.trim()).filter(Boolean));
+    const { names, symbols, votesRaw } = await fetchProjectsWithRetry();
 
     const entries = [];
     let totalVotes = 0n;
 
     for (let i = 0; i < 20; i++) {
       const name = names[i]?.trim() || "";
-      if (name && name !== "") {
+      if (name) {
         const votesBig = votesRaw[i] || 0n;
         const votes = Number(ethers.formatUnits(votesBig, 18));
         totalVotes += votesBig;
-
         entries.push({
           name,
           symbol: symbols[i]?.trim() || '???',
@@ -142,13 +160,11 @@ async function updateLeaderboard() {
 
     entries.sort((a, b) => b.votes - a.votes);
 
-    const ROUND = 5;
-
-    let text = `*Jade1 Live Leaderboard* — Round #${ROUND}\n`;
+    let text = `*Jade1 Live Leaderboard* — Round #${currentRound}\n`;
     text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
 
     if (entries.length === 0 || totalVotes === 0n) {
-      text += `⚠️ Round ${ROUND} just started — votes are accumulating!\nStake JADE & vote on https://jade1.io\n\n`;
+      text += `⚠️ Round ${currentRound} just started — votes are accumulating!\nStake JADE & vote on https://jade1.io\n\n`;
     }
 
     entries.forEach((p, i) => {
@@ -157,27 +173,11 @@ async function updateLeaderboard() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
-    let data;
-    if (isFirstRun || !pinnedMessageId) {
-      // Force NEW message on first run or if no pin
-      data = await sendMessage(text);
-      if (data.ok) {
-        pinnedMessageId = data.result.message_id;
-        console.log(`[NEW PIN] Leaderboard sent & set as pinned: ${pinnedMessageId}`);
-      }
-      isFirstRun = false;
-    } else {
-      const edited = await editMessage(pinnedMessageId, text);
-      if (!edited) {
-        console.log("[FALLBACK] Edit failed → sending new message");
-        data = await sendMessage(text);
-        if (data.ok) {
-          pinnedMessageId = data.result.message_id;
-          console.log(`[NEW FALLBACK] Leaderboard sent - PIN ID: ${pinnedMessageId}`);
-        }
-      } else {
-        console.log("[SUCCESS] Leaderboard updated (edited)");
-      }
+    // Always send NEW on startup/first update; then edit
+    let data = await sendMessage(text);
+    if (data.ok) {
+      pinnedMessageId = data.result.message_id;
+      console.log(`[NEW PIN] Leaderboard sent - new PIN ID: ${pinnedMessageId}`);
     }
   } catch (err) {
     console.error("[ERROR] Leaderboard failed:", err.message);
@@ -185,16 +185,14 @@ async function updateLeaderboard() {
 }
 
 // Update every minute
-setInterval(updateLeaderboard, 60_000);
-updateLeaderboard(); // run immediately
+setInterval(updateLeaderboard, 60000);
+updateLeaderboard(); // immediate
 
-// Optional: new vote notification webhook (Round 5 hardcoded)
+// Webhook (updated to use currentRound)
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
     const short = wallet.slice(0,6) + '...' + wallet.slice(-4);
-
-    const ROUND = 5;
 
     const msg = `
 🗳 *New Vote!*
@@ -202,7 +200,7 @@ app.post('/vote-webhook', async (req, res) => {
 Wallet: \`${short}\`
 Power: *${parseFloat(amount).toFixed(4)} JADE*
 Project: *${projectName} (${projectSymbol})*
-Round: #${ROUND}
+Round: #${currentRound}
 
 https://jade1.io`.trim();
 
@@ -214,7 +212,7 @@ https://jade1.io`.trim();
   }
 });
 
-app.get('/', (req, res) => res.send('Jade Bot — Round #5 Leaderboard Active'));
+app.get('/', (req, res) => res.send(`Jade Bot — Round #${currentRound} Leaderboard Active`));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
