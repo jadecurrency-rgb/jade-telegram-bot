@@ -31,7 +31,7 @@ const RPC_URLS = [
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // ← Change to your actual new Round 5 contract if different (the one with 0 votes)
+const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // New Round 5 voting contract
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])"
@@ -58,7 +58,7 @@ async function initProvider() {
 
 initProvider();
 
-const ROUND_NUMBER = 5; // Current round - change weekly
+const ROUND_NUMBER = 5; // Hardcoded to Round 5
 
 async function sendMessage(text) {
   try {
@@ -96,7 +96,7 @@ async function pinMessage(messageId) {
     console.log(`[PIN] ${data.ok ? 'Success (old pin replaced)' : 'Failed'}: ${data.description || ''}`);
     return data.ok;
   } catch (err) {
-    console.error("[ERROR] Pin failed (check bot admin rights):", err.message);
+    console.error("[ERROR] Pin failed:", err.message);
     return false;
   }
 }
@@ -108,11 +108,11 @@ async function updateLeaderboard() {
   }
 
   try {
-    console.log("[UPDATE] Fetching latest Round 5 data...");
+    console.log("[UPDATE] Fetching fresh Round 5 leaderboard...");
 
     const [names, symbols, , votesRaw] = await contract.getProjects();
 
-    console.log("[DEBUG] Fetched project names:", names.map(n => n?.trim()).filter(Boolean)); // ← Check Railway logs for new projects!
+    console.log("[DEBUG] Fetched project names:", names.map(n => n?.trim()).filter(Boolean));
 
     const entries = [];
     let totalVotes = 0n;
@@ -147,20 +147,22 @@ async function updateLeaderboard() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
+    // Always send a NEW message and pin it — this replaces any old pinned message (deletes old Round 4 data visibility)
     const data = await sendMessage(text);
     if (data.ok) {
       await pinMessage(data.result.message_id);
-      console.log(`[SUCCESS] New Round #5 leaderboard sent & pinned (old replaced)`);
+      console.log(`[SUCCESS] Fresh Round #5 leaderboard sent and pinned (old data replaced)`);
     }
   } catch (err) {
-    console.error("[ERROR] Failed:", err.message);
+    console.error("[ERROR] Leaderboard update failed:", err.message);
   }
 }
 
+// Update every minute
 setInterval(updateLeaderboard, 60_000);
-updateLeaderboard();
+updateLeaderboard(); // Run immediately
 
-// Webhook
+// New vote webhook (Round #5 hardcoded)
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
