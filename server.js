@@ -28,12 +28,14 @@ const ethers = require('ethers');
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // ← NEW voting contract (confirmed)
+const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // New voting contract for Round 5
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])",
   "function currentRound() view returns (uint256)"
 ];
+
+let isFirstRun = true; // Flag to force new message on startup
 
 async function initProvider() {
   for (const url of RPC_URLS) {
@@ -109,7 +111,16 @@ async function updateLeaderboard() {
   try {
     console.log("[UPDATE] Fetching leaderboard from new contract...");
 
+    // Small delay on first fetch to let chain propagate new projects
+    if (isFirstRun) {
+      console.log("[INFO] First run - waiting 5s for contract data to settle...");
+      await new Promise(r => setTimeout(r, 5000));
+    }
+
     const [names, symbols, , votesRaw] = await contract.getProjects();
+
+    // Log raw data for debug (see what projects are coming)
+    console.log("[DEBUG] Raw projects from chain:", names.map(n => n.trim()).filter(Boolean));
 
     const entries = [];
     let totalVotes = 0n;
@@ -131,7 +142,7 @@ async function updateLeaderboard() {
 
     entries.sort((a, b) => b.votes - a.votes);
 
-    const ROUND = 5; // Hardcoded to Round 5 as requested
+    const ROUND = 5;
 
     let text = `*Jade1 Live Leaderboard* — Round #${ROUND}\n`;
     text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
@@ -146,23 +157,26 @@ async function updateLeaderboard() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
-    if (!pinnedMessageId) {
-      const data = await sendMessage(text);
+    let data;
+    if (isFirstRun || !pinnedMessageId) {
+      // Force NEW message on first run or if no pin
+      data = await sendMessage(text);
       if (data.ok) {
         pinnedMessageId = data.result.message_id;
-        console.log(`[NEW] Leaderboard sent - PIN message ID: ${pinnedMessageId}`);
+        console.log(`[NEW PIN] Leaderboard sent & set as pinned: ${pinnedMessageId}`);
       }
+      isFirstRun = false;
     } else {
       const edited = await editMessage(pinnedMessageId, text);
       if (!edited) {
         console.log("[FALLBACK] Edit failed → sending new message");
-        const data = await sendMessage(text);
+        data = await sendMessage(text);
         if (data.ok) {
           pinnedMessageId = data.result.message_id;
           console.log(`[NEW FALLBACK] Leaderboard sent - PIN ID: ${pinnedMessageId}`);
         }
       } else {
-        console.log("[SUCCESS] Leaderboard updated");
+        console.log("[SUCCESS] Leaderboard updated (edited)");
       }
     }
   } catch (err) {
@@ -174,13 +188,13 @@ async function updateLeaderboard() {
 setInterval(updateLeaderboard, 60_000);
 updateLeaderboard(); // run immediately
 
-// Optional: new vote notification webhook
+// Optional: new vote notification webhook (Round 5 hardcoded)
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
     const short = wallet.slice(0,6) + '...' + wallet.slice(-4);
 
-    const ROUND = 5; // Hardcoded to Round 5
+    const ROUND = 5;
 
     const msg = `
 🗳 *New Vote!*
