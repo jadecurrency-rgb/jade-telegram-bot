@@ -16,7 +16,7 @@ const CHANNEL_ID = process.env.CHANNEL_ID;
 
 const ethers = require('ethers');
 
-// Fast/reliable RPCs
+// Reliable BSC RPCs (prioritized official/fast ones)
 const RPC_URLS = [
   "https://bsc-dataseed.binance.org/",
   "https://bsc-dataseed1.defibit.io/",
@@ -24,14 +24,15 @@ const RPC_URLS = [
   "https://bsc-dataseed2.binance.org/",
   "https://rpc.ankr.com/bsc",
   "https://bsc-rpc.publicnode.com",
-  "https://bscrpc.com"
+  "https://bscrpc.com",
+  "https://bsc.publicnode.com"
 ];
 
 let provider = null;
 let contract = null;
-let currentRound = 5; // fallback
+let currentRound = 5; // initial fallback
 
-const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // Confirmed Round 5 contract
+const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // Your confirmed Round 5 contract
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])",
@@ -41,19 +42,21 @@ const ABI = [
 async function selectBestProvider() {
   let best = { round: 0n };
 
+  console.log("[RPC SELECTION] Checking RPCs for latest round...");
+
   for (const url of RPC_URLS) {
     try {
       const tempProvider = new ethers.JsonRpcProvider(url);
-      await tempProvider.getBlockNumber();
+      await tempProvider.getBlockNumber(); // connectivity check
 
       const tempContract = new ethers.Contract(CONTRACT_ADDRESS, ABI, tempProvider);
       const roundBig = await tempContract.currentRound();
       const roundNum = Number(roundBig);
 
-      console.log(`[RPC CHECK] ${url} reports Round #${roundNum}`);
+      console.log(`[RPC] ${url} → currentRound #${roundNum}`);
 
       if (roundNum > best.round) {
-        best = { url, round: roundNum, provider: tempProvider, contract: tempContract };
+        best = { url, round: roundBig, provider: tempProvider, contract: tempContract };
       }
     } catch (e) {
       console.warn(`[RPC SKIP] ${url}: ${e.message}`);
@@ -64,16 +67,27 @@ async function selectBestProvider() {
     provider = best.provider;
     contract = best.contract;
     currentRound = Number(best.round);
-    console.log(`[SELECTED] Best RPC with Round #${currentRound}`);
+    console.log(`[SUCCESS] Selected best RPC with currentRound #${currentRound}`);
   } else {
-    console.error("[FALLBACK RPC] Using first");
+    console.error("[FALLBACK] No good RPC - using first");
     provider = new ethers.JsonRpcProvider(RPC_URLS[0]);
     contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
     currentRound = 5;
   }
+
+  // Extra confirmation fetch
+  try {
+    const roundBig = await contract.currentRound();
+    currentRound = Number(roundBig);
+    console.log(`[CONFIRMED] On-chain currentRound: #${currentRound}`);
+  } catch (e) {
+    console.warn("[WARN] Final round confirm failed - using fallback #5");
+  }
 }
 
-selectBestProvider(); // Run on startup
+// Run selection on startup + every 30 min (in case of future resets)
+selectBestProvider();
+setInterval(selectBestProvider, 30 * 60 * 1000);
 
 async function sendMessage(text) {
   try {
@@ -98,19 +112,29 @@ async function sendMessage(text) {
 
 async function updateLeaderboard() {
   if (!contract) {
-    console.log("[WARN] Contract not ready yet");
+    console.log("[WARN] Contract/provider not ready");
     return;
   }
 
-  // Small delay on startup for propagation
-  if (Date.now() < startTime + 10000) await new Promise(r => setTimeout(r, 5000));
-
   try {
-    console.log("[FETCH] Pulling latest projects/votes...");
+    console.log("[UPDATE] Fetching fresh leaderboard data...");
 
-    const [names, symbols, , votesRaw] = await contract.getProjects();
+    // Retry up to 3 times with delay (handles any temporary RPC lag)
+    let data;
+    for (let i = 0; i < 3; i++) {
+      try {
+        data = await contract.getProjects();
+        break;
+      } catch (e) {
+        console.warn(`[RETRY ${i+1}] getProjects failed: ${e.message}`);
+        await new Promise(r => setTimeout(r, 10000)); // 10s wait
+      }
+    }
+    if (!data) throw new Error("Failed after retries");
 
-    console.log("[DEBUG PROJECTS]", names.map(n => n?.trim()).filter(Boolean)); // Should show new Chinese names!
+    const [names, symbols, , votesRaw] = data;
+
+    console.log("[DEBUG] Current projects from chain:", names.map(n => n?.trim()).filter(Boolean));
 
     const entries = [];
     let totalVotes = 0n;
@@ -140,20 +164,21 @@ async function updateLeaderboard() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
-    // FORCE NEW message every update (temporary to clear old pin)
-    const data = await sendMessage(text);
-    if (data.ok) {
-      console.log(`[FORCED NEW] Fresh Round #${currentRound} leaderboard sent`);
+    // FORCE send new message every update (temporary to clear old Round 4 pins)
+    const msgData = await sendMessage(text);
+    if (msgData.ok) {
+      console.log(`[FORCED NEW] Sent fresh Round #${currentRound} leaderboard`);
     }
   } catch (err) {
-    console.error("[FETCH ERROR]", err.message);
+    console.error("[UPDATE ERROR]", err.message);
   }
 }
 
-const startTime = Date.now();
+// Update every minute
 setInterval(updateLeaderboard, 60000);
-updateLeaderboard(); // Immediate
+updateLeaderboard(); // run immediately + with initial delay for safety
 
+// Webhook uses dynamic round
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
@@ -172,7 +197,7 @@ https://jade1.io`.trim();
     await sendMessage(msg);
     res.json({ success: true });
   } catch (err) {
-    console.error("[WEBHOOK ERR]", err);
+    console.error("[WEBHOOK ERROR]", err);
     res.status(500).json({ error: 'failed' });
   }
 });
@@ -180,4 +205,4 @@ https://jade1.io`.trim();
 app.get('/', (req, res) => res.send(`Jade Bot — Round #${currentRound} Leaderboard Active`));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Bot running on port ${PORT}`));
