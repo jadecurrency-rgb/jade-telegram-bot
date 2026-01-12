@@ -16,7 +16,7 @@ const CHANNEL_ID = process.env.CHANNEL_ID;
 
 const ethers = require('ethers');
 
-// Reliable BSC RPCs
+// Reliable BSC RPCs - official/fast first
 const RPC_URLS = [
   "https://bsc-dataseed.binance.org/",
   "https://bsc-dataseed1.defibit.io/",
@@ -31,7 +31,7 @@ const RPC_URLS = [
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // Confirmed NEW Round 5 contract
+const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // NEW Round 5 contract (confirmed with recent Set Projects tx)
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])"
@@ -58,7 +58,7 @@ async function initProvider() {
 
 initProvider();
 
-const ROUND_NUMBER = 5; // Manual for current round
+const ROUND_NUMBER = 5; // Manual - change next week to 6, etc.
 
 async function sendMessage(text) {
   try {
@@ -108,11 +108,25 @@ async function updateLeaderboard() {
   }
 
   try {
-    console.log("[UPDATE] Fetching latest leaderboard from Round 5 contract...");
+    console.log("[UPDATE] Fetching fresh data from Round 5 contract...");
 
-    const [names, symbols, , votesRaw] = await contract.getProjects();
+    // Retry fetch up to 5 times (10s delay) to handle any RPC lag
+    let names, symbols, votesRaw;
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      try {
+        const [n, s, , v] = await contract.getProjects();
+        names = n;
+        symbols = s;
+        votesRaw = v;
+        break;
+      } catch (e) {
+        console.warn(`[RETRY ${attempt}/5] getProjects failed: ${e.message}`);
+        await new Promise(r => setTimeout(r, 10000)); // 10s wait
+      }
+    }
+    if (!names) throw new Error("Failed to fetch after retries");
 
-    console.log("[DEBUG] Fetched project names:", names.map(n => n?.trim()).filter(Boolean)); // Check this in Railway logs!
+    console.log("[DEBUG] Fetched project names:", names.map(n => n?.trim()).filter(Boolean)); // Check Railway logs here!
 
     const entries = [];
     let totalVotes = 0n;
@@ -147,21 +161,22 @@ async function updateLeaderboard() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
+    // ALWAYS send NEW message + pin it (replaces old pinned automatically)
     const data = await sendMessage(text);
     if (data.ok) {
-      await pinMessage(data.result.message_id); // Pins new one (replaces any old pin automatically)
-      console.log(`[SUCCESS] Fresh Round #5 leaderboard sent and pinned`);
+      await pinMessage(data.result.message_id);
+      console.log(`[SUCCESS] Sent & pinned fresh Round #${ROUND_NUMBER} leaderboard`);
     }
   } catch (err) {
-    console.error("[ERROR] Leaderboard failed:", err.message);
+    console.error("[ERROR] Update failed:", err.message);
   }
 }
 
 // Update every minute
 setInterval(updateLeaderboard, 60_000);
-updateLeaderboard(); // Run immediately
+updateLeaderboard(); // Immediate run
 
-// Webhook for new votes
+// Webhook
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
