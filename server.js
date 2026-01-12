@@ -31,7 +31,7 @@ const RPC_URLS = [
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // NEW Round 5 contract (reset complete)
+const CONTRACT_ADDRESS = "0x41875a6281f843cC08E999E92936C37e4a935575"; // NEW Round 5 contract (reset complete)
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])"
