@@ -28,7 +28,7 @@ const ethers = require('ethers');
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a";
+const CONTRACT_ADDRESS = "0x9AccD1f82330ADE9E3Eb9fAb9c069ab98D5bB42a"; // ← NEW voting contract (confirmed)
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])",
@@ -107,7 +107,7 @@ async function updateLeaderboard() {
   }
 
   try {
-    console.log("[UPDATE] Fetching leaderboard...");
+    console.log("[UPDATE] Fetching leaderboard from new contract...");
 
     const [names, symbols, , votesRaw] = await contract.getProjects();
 
@@ -131,11 +131,13 @@ async function updateLeaderboard() {
 
     entries.sort((a, b) => b.votes - a.votes);
 
-    let text = `*Jade1 Live Leaderboard* — Round #5\n`;
+    const ROUND = 5; // Hardcoded to Round 5 as requested
+
+    let text = `*Jade1 Live Leaderboard* — Round #${ROUND}\n`;
     text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
 
     if (entries.length === 0 || totalVotes === 0n) {
-      text += `⚠️ Round 5 just started — votes are accumulating!\nStake JADE & vote on https://jade1.io\n\n`;
+      text += `⚠️ Round ${ROUND} just started — votes are accumulating!\nStake JADE & vote on https://jade1.io\n\n`;
     }
 
     entries.forEach((p, i) => {
@@ -178,13 +180,15 @@ app.post('/vote-webhook', async (req, res) => {
     const { wallet, amount, projectName, projectSymbol } = req.body;
     const short = wallet.slice(0,6) + '...' + wallet.slice(-4);
 
+    const ROUND = 5; // Hardcoded to Round 5
+
     const msg = `
 🗳 *New Vote!*
 
 Wallet: \`${short}\`
 Power: *${parseFloat(amount).toFixed(4)} JADE*
 Project: *${projectName} (${projectSymbol})*
-Round: #5
+Round: #${ROUND}
 
 https://jade1.io`.trim();
 
