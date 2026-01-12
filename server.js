@@ -31,7 +31,7 @@ const RPC_URLS = [
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x41875a6281f843cC08E999E92936C37e4a935575"; // NEW Round 5 contract (reset complete)
+const CONTRACT_ADDRESS = "0x41875a6281f843cC08E999E92936C37e4a935575"; // Current Round 5 contract
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])"
@@ -60,6 +60,8 @@ initProvider();
 
 const ROUND_NUMBER = 5; // Hardcoded Round 5
 
+let pinnedMessageId = null; // Stores the pinned leaderboard message ID
+
 async function sendMessage(text) {
   try {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
@@ -78,6 +80,28 @@ async function sendMessage(text) {
   } catch (err) {
     console.error("[ERROR] Send failed:", err.message);
     return { ok: false };
+  }
+}
+
+async function editMessage(messageId, text) {
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: CHANNEL_ID,
+        message_id: messageId,
+        text,
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true
+      })
+    });
+    const data = await res.json();
+    console.log(`[EDIT] ${data.ok ? 'Success' : 'Failed'}: ${data.description || ''}`);
+    return data.ok;
+  } catch (err) {
+    console.error("[ERROR] Edit failed:", err.message);
+    return false;
   }
 }
 
@@ -101,18 +125,11 @@ async function pinMessage(messageId) {
   }
 }
 
-async function updateLeaderboard() {
-  if (!contract) {
-    console.log("[WARN] Contract not initialized");
-    return;
-  }
+async function buildLeaderboardText() {
+  if (!contract) return null;
 
   try {
-    console.log("[UPDATE] Fetching fresh Round 5 data...");
-
     const [names, symbols, , votesRaw] = await contract.getProjects();
-
-    console.log("[DEBUG] Projects:", names.map(n => n?.trim()).filter(Boolean)); // Check logs for confirmation
 
     const entries = [];
     let totalVotes = 0n;
@@ -147,20 +164,41 @@ async function updateLeaderboard() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
-    const data = await sendMessage(text);
-    if (data.ok) {
-      await pinMessage(data.result.message_id); // Pins new, auto-replaces old
-      console.log(`[SUCCESS] Fresh Round 5 leaderboard sent & pinned`);
-    }
+    return text;
   } catch (err) {
-    console.error("[ERROR] Update failed:", err.message);
+    console.error("[ERROR] Build leaderboard failed:", err.message);
+    return null;
   }
 }
 
-setInterval(updateLeaderboard, 60_000);
+async function updateLeaderboard() {
+  const text = await buildLeaderboardText();
+  if (!text) return;
+
+  if (pinnedMessageId) {
+    // Try to edit existing pinned message
+    const edited = await editMessage(pinnedMessageId, text);
+    if (edited) {
+      console.log("[SUCCESS] Leaderboard updated (edited pinned message)");
+      return;
+    }
+    // If edit fails (e.g. message deleted), fallback to new message
+    console.log("[FALLBACK] Edit failed → sending new message");
+  }
+
+  // Send new message and pin it
+  const data = await sendMessage(text);
+  if (data.ok) {
+    pinnedMessageId = data.result.message_id;
+    await pinMessage(pinnedMessageId);
+    console.log(`[SUCCESS] New leaderboard sent & pinned (ID: ${pinnedMessageId})`);
+  }
+}
+
+// Send initial leaderboard on startup
 updateLeaderboard();
 
-// Webhook
+// Webhook - sends vote alert AND updates the leaderboard
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
@@ -177,6 +215,10 @@ Round: #${ROUND_NUMBER}
 https://jade1.io`.trim();
 
     await sendMessage(msg);
+
+    // Update the leaderboard after a new vote
+    await updateLeaderboard();
+
     res.json({ success: true });
   } catch (err) {
     console.error("[WEBHOOK ERROR]", err);
@@ -187,4 +229,6 @@ https://jade1.io`.trim();
 app.get('/', (req, res) => res.send(`Jade Bot — Round #${ROUND_NUMBER} Active`));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Bot running on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Bot running on port ${PORT}`);
+});
