@@ -31,7 +31,7 @@ const RPC_URLS = [
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x515eFeA28220556257Fb2A94aF632434F5b3B7dd"; // ← YOU SAID THIS IS ALREADY THE NEW ROUND 6 CONTRACT
+const CONTRACT_ADDRESS = "0x515eFeA28220556257Fb2A94aF632434F5b3B7dd";
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])"
@@ -45,22 +45,19 @@ async function initProvider() {
       provider = tempProvider;
       contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
       console.log(`[SUCCESS] Connected to RPC: ${url}`);
-      break;
+      return true;
     } catch (e) {
       console.warn(`[SKIP] ${url}: ${e.message}`);
     }
   }
 
-  if (!provider) {
-    console.error("[CRITICAL] No working RPC found");
-  }
+  console.error("[CRITICAL] No working RPC found after trying all");
+  return false;
 }
 
-initProvider();
+const ROUND_NUMBER = 6;
 
-const ROUND_NUMBER = 6; // Hardcoded to Round 6
-
-let pinnedMessageId = null; // Stores the pinned leaderboard message ID
+let pinnedMessageId = null;
 
 async function sendMessage(text) {
   try {
@@ -126,7 +123,10 @@ async function pinMessage(messageId) {
 }
 
 async function buildLeaderboardText() {
-  if (!contract) return null;
+  if (!contract) {
+    console.error("[BUILD] Contract not ready");
+    return null;
+  }
 
   try {
     const [names, symbols, , votesRaw] = await contract.getProjects();
@@ -172,33 +172,57 @@ async function buildLeaderboardText() {
 }
 
 async function updateLeaderboard() {
+  console.log("[UPDATE] Starting leaderboard update...");
   const text = await buildLeaderboardText();
-  if (!text) return;
+  if (!text) {
+    console.error("[UPDATE] Failed to build text — skipping send");
+    return;
+  }
 
   if (pinnedMessageId) {
-    // Try to edit existing pinned message
     const edited = await editMessage(pinnedMessageId, text);
     if (edited) {
       console.log("[SUCCESS] Leaderboard updated (edited pinned message)");
       return;
     }
-    // If edit fails (e.g. message deleted), fallback to new message
     console.log("[FALLBACK] Edit failed → sending new message");
+    pinnedMessageId = null; // reset so it sends new
   }
 
-  // Send new message and pin it
   const data = await sendMessage(text);
   if (data.ok) {
     pinnedMessageId = data.result.message_id;
     await pinMessage(pinnedMessageId);
     console.log(`[SUCCESS] New leaderboard sent & pinned (ID: ${pinnedMessageId})`);
+  } else {
+    console.error("[UPDATE] Failed to send new message");
   }
 }
 
-// Send initial leaderboard on startup
-updateLeaderboard();
+// === CRITICAL FIX: Wait for provider init before first update ===
+initProvider().then(async (success) => {
+  if (success) {
+    console.log("[INIT] Provider connected — sending initial leaderboard");
+    await updateLeaderboard();
 
-// Webhook - sends vote alert AND updates the leaderboard
+    // Periodic updates every 5 minutes (even if no votes)
+    setInterval(async () => {
+      console.log("[INTERVAL] Running periodic leaderboard update...");
+      await updateLeaderboard();
+    }, 300000); // 5 minutes
+  } else {
+    console.error("[INIT] Provider failed — no updates possible until restart");
+  }
+});
+
+// Optional: Manual trigger endpoint (hit /force-update in browser or curl)
+app.get('/force-update', async (req, res) => {
+  console.log("[MANUAL] Force update requested");
+  await updateLeaderboard();
+  res.send('Force update triggered — check logs/channel');
+});
+
+// Webhook remains unchanged
 app.post('/vote-webhook', async (req, res) => {
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
@@ -215,8 +239,6 @@ Round: #${ROUND_NUMBER}
 https://jade1.io`.trim();
 
     await sendMessage(msg);
-
-    // Update the leaderboard after a new vote
     await updateLeaderboard();
 
     res.json({ success: true });
