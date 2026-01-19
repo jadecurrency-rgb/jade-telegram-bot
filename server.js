@@ -38,20 +38,23 @@ const ABI = [
 ];
 
 async function initProvider() {
+  console.log("[INIT] Starting provider initialization...");
   for (const url of RPC_URLS) {
     try {
+      console.log(`[INIT] Trying RPC: ${url}`);
       const tempProvider = new ethers.JsonRpcProvider(url);
-      await tempProvider.getBlockNumber();
+      const blockNumber = await tempProvider.getBlockNumber();
+      console.log(`[INIT] Success with ${url} — current block: ${blockNumber}`);
       provider = tempProvider;
       contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
-      console.log(`[SUCCESS] Connected to RPC: ${url}`);
+      console.log("[INIT] Contract instance created");
       return true;
     } catch (e) {
-      console.warn(`[SKIP] ${url}: ${e.message}`);
+      console.warn(`[INIT] Failed ${url}: ${e.message}`);
     }
   }
 
-  console.error("[CRITICAL] No working RPC found after trying all");
+  console.error("[INIT] CRITICAL: All RPCs failed — no connection possible");
   return false;
 }
 
@@ -60,6 +63,8 @@ const ROUND_NUMBER = 6;
 let pinnedMessageId = null;
 
 async function sendMessage(text) {
+  console.log("[SEND] Attempting to send message...");
+  console.log("[SEND] Message preview (first 200 chars):\n", text.slice(0, 200) + (text.length > 200 ? '...' : ''));
   try {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -72,15 +77,20 @@ async function sendMessage(text) {
       })
     });
     const data = await res.json();
-    console.log(`[MSG] ${data.ok ? 'Sent' : 'Failed'}: ${data.description || ''}`);
+    if (data.ok) {
+      console.log(`[SEND] SUCCESS: Message sent — ID: ${data.result.message_id}`);
+    } else {
+      console.error(`[SEND] FAILED: ${JSON.stringify(data)}`);
+    }
     return data;
   } catch (err) {
-    console.error("[ERROR] Send failed:", err.message);
+    console.error("[SEND] EXCEPTION:", err.message);
     return { ok: false };
   }
 }
 
 async function editMessage(messageId, text) {
+  console.log(`[EDIT] Attempting to edit message ID: ${messageId}`);
   try {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/editMessageText`, {
       method: 'POST',
@@ -94,15 +104,20 @@ async function editMessage(messageId, text) {
       })
     });
     const data = await res.json();
-    console.log(`[EDIT] ${data.ok ? 'Success' : 'Failed'}: ${data.description || ''}`);
+    if (data.ok) {
+      console.log("[EDIT] SUCCESS");
+    } else {
+      console.error(`[EDIT] FAILED: ${JSON.stringify(data)}`);
+    }
     return data.ok;
   } catch (err) {
-    console.error("[ERROR] Edit failed:", err.message);
+    console.error("[EDIT] EXCEPTION:", err.message);
     return false;
   }
 }
 
 async function pinMessage(messageId) {
+  console.log(`[PIN] Attempting to pin message ID: ${messageId}`);
   try {
     const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/pinChatMessage`, {
       method: 'POST',
@@ -114,22 +129,33 @@ async function pinMessage(messageId) {
       })
     });
     const data = await res.json();
-    console.log(`[PIN] ${data.ok ? 'Success (old pin replaced)' : 'Failed'}`);
+    if (data.ok) {
+      console.log("[PIN] SUCCESS (old pin replaced if any)");
+    } else {
+      console.error(`[PIN] FAILED: ${JSON.stringify(data)}`);
+    }
     return data.ok;
   } catch (err) {
-    console.error("[ERROR] Pin failed:", err.message);
+    console.error("[PIN] EXCEPTION:", err.message);
     return false;
   }
 }
 
 async function buildLeaderboardText() {
   if (!contract) {
-    console.error("[BUILD] Contract not ready");
+    console.error("[BUILD] Contract not initialized — cannot query");
     return null;
   }
 
+  console.log("[BUILD] Querying getProjects() on-chain...");
   try {
-    const [names, symbols, , votesRaw] = await contract.getProjects();
+    const [names, symbols, addresses, votesRaw] = await contract.getProjects();
+
+    // DEBUG: Raw data
+    console.log("[BUILD] Raw names:", names);
+    console.log("[BUILD] Raw symbols:", symbols);
+    console.log("[BUILD] Raw addresses:", addresses.map(a => a.toLowerCase()));
+    console.log("[BUILD] Raw votes (wei):", votesRaw.map(v => v.toString()));
 
     const entries = [];
     let totalVotes = 0n;
@@ -149,12 +175,14 @@ async function buildLeaderboardText() {
       }
     }
 
+    console.log(`[BUILD] Parsed ${entries.length} projects`);
     entries.sort((a, b) => b.votes - a.votes);
 
     let text = `*Jade1 Live Leaderboard* — Round #${ROUND_NUMBER}\n`;
     text += `Total Votes: *${Number(ethers.formatUnits(totalVotes, 18)).toFixed(0)} JADE*\n\n`;
 
     if (entries.length === 0 || totalVotes === 0n) {
+      console.log("[BUILD] No entries or zero votes — using 'just started' fallback");
       text += `⚠️ Round ${ROUND_NUMBER} just started — votes are accumulating!\nHold JADE & vote on https://jade1.io\n\n`;
     }
 
@@ -164,66 +192,74 @@ async function buildLeaderboardText() {
 
     text += `\nUpdated: ${new Date().toUTCString()}\nhttps://jade1.io`;
 
+    console.log("[BUILD] Leaderboard text built successfully");
     return text;
   } catch (err) {
-    console.error("[ERROR] Build leaderboard failed:", err.message);
+    console.error("[BUILD] EXCEPTION during contract call:", err.message);
+    console.error("[BUILD] Full error:", err);
     return null;
   }
 }
 
 async function updateLeaderboard() {
-  console.log("[UPDATE] Starting leaderboard update...");
+  console.log("[UPDATE] === Starting leaderboard update ===");
   const text = await buildLeaderboardText();
   if (!text) {
-    console.error("[UPDATE] Failed to build text — skipping send");
+    console.error("[UPDATE] Failed to build text — aborting update");
     return;
   }
 
   if (pinnedMessageId) {
+    console.log(`[UPDATE] Attempting to edit existing pinned message ID: ${pinnedMessageId}`);
     const edited = await editMessage(pinnedMessageId, text);
     if (edited) {
-      console.log("[SUCCESS] Leaderboard updated (edited pinned message)");
+      console.log("[UPDATE] SUCCESS: Edited existing message");
       return;
     }
-    console.log("[FALLBACK] Edit failed → sending new message");
-    pinnedMessageId = null; // reset so it sends new
+    console.log("[UPDATE] Edit failed — falling back to new message");
+    pinnedMessageId = null;
   }
 
+  console.log("[UPDATE] Sending new leaderboard message...");
   const data = await sendMessage(text);
   if (data.ok) {
     pinnedMessageId = data.result.message_id;
+    console.log(`[UPDATE] New message sent — now pinning ID: ${pinnedMessageId}`);
     await pinMessage(pinnedMessageId);
-    console.log(`[SUCCESS] New leaderboard sent & pinned (ID: ${pinnedMessageId})`);
   } else {
-    console.error("[UPDATE] Failed to send new message");
+    console.error("[UPDATE] Failed to send new message — no pin attempted");
   }
+  console.log("[UPDATE] === Leaderboard update complete ===\n");
 }
 
-// === CRITICAL FIX: Wait for provider init before first update ===
-initProvider().then(async (success) => {
-  if (success) {
-    console.log("[INIT] Provider connected — sending initial leaderboard");
+// === Initialization with full debug ===
+(async () => {
+  console.log("[STARTUP] Bot starting...");
+  const providerOk = await initProvider();
+  if (providerOk) {
+    console.log("[STARTUP] Provider ready — triggering initial leaderboard");
     await updateLeaderboard();
 
-    // Periodic updates every 5 minutes (even if no votes)
+    // Periodic updates
     setInterval(async () => {
-      console.log("[INTERVAL] Running periodic leaderboard update...");
+      console.log("[INTERVAL] Triggering periodic update...");
       await updateLeaderboard();
     }, 300000); // 5 minutes
   } else {
-    console.error("[INIT] Provider failed — no updates possible until restart");
+    console.error("[STARTUP] Provider failed — bot cannot function until restart with working RPCs");
   }
-});
+})();
 
-// Optional: Manual trigger endpoint (hit /force-update in browser or curl)
+// Manual force endpoint
 app.get('/force-update', async (req, res) => {
-  console.log("[MANUAL] Force update requested");
+  console.log("[MANUAL] Force update requested via endpoint");
   await updateLeaderboard();
-  res.send('Force update triggered — check logs/channel');
+  res.send('Force update triggered — check logs and Telegram channel');
 });
 
-// Webhook remains unchanged
+// Webhook
 app.post('/vote-webhook', async (req, res) => {
+  console.log("[WEBHOOK] Vote webhook hit:", req.body);
   try {
     const { wallet, amount, projectName, projectSymbol } = req.body;
     const short = wallet.slice(0,6) + '...' + wallet.slice(-4);
@@ -252,5 +288,5 @@ app.get('/', (req, res) => res.send(`Jade Bot — Round #${ROUND_NUMBER} Active`
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Bot running on port ${PORT}`);
+  console.log(`[STARTUP] Server listening on port ${PORT}`);
 });
