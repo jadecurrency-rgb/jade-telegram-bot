@@ -31,7 +31,7 @@ const RPC_URLS = [
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x41875a6281f843cC08E999E92936C37e4a935575"; // Current Round 5 contract
+const CONTRACT_ADDRESS = "0x515eFeA28220556257Fb2A94aF632434F5b3B7dd"; // ← YOU SAID THIS IS ALREADY THE NEW ROUND 6 CONTRACT
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])"
@@ -58,7 +58,7 @@ async function initProvider() {
 
 initProvider();
 
-const ROUND_NUMBER = 5; // Hardcoded Round 5
+const ROUND_NUMBER = 6; // Hardcoded to Round 6
 
 let pinnedMessageId = null; // Stores the pinned leaderboard message ID
 
