@@ -31,7 +31,7 @@ const RPC_URLS = [
 let provider = null;
 let contract = null;
 
-const CONTRACT_ADDRESS = "0x9184efAf73c33ace5a4c1Eae51516f5cB60A0C38";
+const CONTRACT_ADDRESS = "0x0a868195e9cca1193F3D99045bBc1eccE4bAA378";
 
 const ABI = [
   "function getProjects() view returns (string[20], string[20], address[20], uint256[20])"
@@ -54,7 +54,7 @@ async function initProvider() {
   return false;
 }
 
-const ROUND_NUMBER = 14;
+const ROUND_NUMBER = 15;
 
 let pinnedMessageId = null; // Stored in memory — resets on restart
 
